@@ -106,7 +106,8 @@ MODULE input_cp2k_dft
       xas_4f_type, xas_4p_type, xas_4s_type, xas_dip_len, xas_dip_vel, xas_dscf, xas_none, &
       xas_not_excited, xas_tdp_by_index, xas_tdp_by_kind, xas_tp_fh, xas_tp_flex, xas_tp_hh, &
       xas_tp_xfh, xas_tp_xhh, xes_tp_val, &
-      no_admm_type, admm1_type, admm2_type, admms_type, admmp_type, admmq_type
+      no_admm_type, admm1_type, admm2_type, admms_type, admmp_type, admmq_type, &
+      rtp_method_tddft, rtp_method_gw
    USE input_cp2k_almo, ONLY: create_almo_scf_section
    USE input_cp2k_distribution, ONLY: create_distribution_section
    USE input_cp2k_ec, ONLY: create_ec_section
@@ -8574,6 +8575,20 @@ CONTAINS
                           "is an upper bound for the needed one.", &
                           usage="EXP_ACCURACY 1.0E-6", &
                           default_r_val=1.0E-9_dp)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      ! Marek : Controlling flow to TD-aGW
+      CALL keyword_create(keyword, __LOCATION__, name="RTP_METHOD", &
+                          description="Which method is used for the time propagation of electronic structure. "// &
+                          "By default, use the TDDFT method. Can also choose TD-aGW method, which propagates the lesser "// &
+                          "Green's function instead of density matrix/molecular orbitals.", &
+                          usage="RTP_METHOD TDAGW", &
+                          default_i_val=rtp_method_tddft,&
+                          enum_c_vals=s2a("TDDFT", "TDAGW"),&
+                          enum_i_vals=(/rtp_method_tddft, rtp_method_gw/),&
+                          enum_desc=s2a("Use TDDFT for density matrix/MO propagation.",&
+                                        "Use TD-aGW for Green's function propagation"))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
