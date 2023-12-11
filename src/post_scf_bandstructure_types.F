@@ -167,6 +167,7 @@ MODULE post_scf_bandstructure_types
                                                          fm_W_MIC_freq, &
                                                          fm_W_MIC_freq_1_extra, &
                                                          fm_W_MIC_freq_1_no_extra, &
+                                                         fm_W_MIC_freq_zero, &
                                                          fm_h_G0W0_Gamma
 
       ! global dbcsr matrices used in GW
