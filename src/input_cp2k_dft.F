@@ -8849,6 +8849,16 @@ CONTAINS
 
       CALL section_add_subsection(print_section, print_key)
       CALL section_release(print_key)
+      
+      ! Marek : Add print option for ASCII density files - DEVELPMENT ONLY?
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "DENSITY_MATRIX", &
+                                       description="Prints the density matrix at iterations in clear text to a file", &
+                                       print_level=high_print_level, common_iter_levels=0, &
+                                       each_iter_names=s2a("MD"), &
+                                       each_iter_values=(/1/), &
+                                       filename="rho")
+      CALL section_add_subsection(print_section, print_key)
+      CALL section_release(print_key)
 
       CALL section_add_subsection(section, print_section)
       CALL section_release(print_section)
