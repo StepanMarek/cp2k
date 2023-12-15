@@ -107,7 +107,7 @@ MODULE input_cp2k_dft
       xas_not_excited, xas_tdp_by_index, xas_tdp_by_kind, xas_tp_fh, xas_tp_flex, xas_tp_hh, &
       xas_tp_xfh, xas_tp_xhh, xes_tp_val, &
       no_admm_type, admm1_type, admm2_type, admms_type, admmp_type, admmq_type, &
-      rtp_method_tddft, rtp_method_gw
+      rtp_method_tddft, rtp_method_gw, rtp_tdagw_ham_ks, rtp_tdagw_ham_g0w0
    USE input_cp2k_almo, ONLY: create_almo_scf_section
    USE input_cp2k_distribution, ONLY: create_distribution_section
    USE input_cp2k_ec, ONLY: create_ec_section
@@ -8589,6 +8589,19 @@ CONTAINS
                           enum_i_vals=(/rtp_method_tddft, rtp_method_gw/),&
                           enum_desc=s2a("Use TDDFT for density matrix/MO propagation.",&
                                         "Use TD-aGW for Green's function propagation"))
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      ! Marek : Development option - run TD-aGW starting from the KS Hamiltonian
+      CALL keyword_create(keyword, __LOCATION__, name="TDAGW_HAMILTONIAN", &
+                          description="Which Hamiltonian to use as the single-particle Hamiltonian"// &
+                                      " in the Green's propagator.",&
+                          usage="TDAGW_HAMILTONIAN G0W0", &
+                          default_i_val=rtp_tdagw_ham_g0w0,&
+                          enum_c_vals=s2a("KS", "G0W0"),&
+                          enum_i_vals=(/rtp_tdagw_ham_ks, rtp_tdagw_ham_g0w0/),&
+                          enum_desc=s2a("Use Kohn-Sham Hamiltonian for Green's propagation.",&
+                                        "Use G0W0 Hamiltonian for Green's function propagation"))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
