@@ -133,6 +133,7 @@ MODULE post_scf_bandstructure_types
       INTEGER                                         :: num_time_freq_points = -1, &
                                                          num_freq_points_fit = -1
       REAL(KIND=dp), DIMENSION(:), ALLOCATABLE        :: imag_time_points, &
+                                                         imag_time_weights_freq_zero, &
                                                          imag_freq_points, &
                                                          imag_freq_points_fit
       REAL(KIND=dp), DIMENSION(:, :), ALLOCATABLE     :: weights_cos_t_to_w, &
@@ -298,6 +299,7 @@ CONTAINS
       IF (ALLOCATED(bs_env%ref_atom_primitive_cell)) DEALLOCATE (bs_env%ref_atom_primitive_cell)
       IF (ALLOCATED(bs_env%cell_of_i_atom)) DEALLOCATE (bs_env%cell_of_i_atom)
       IF (ALLOCATED(bs_env%imag_time_points)) DEALLOCATE (bs_env%imag_time_points)
+      IF (ALLOCATED(bs_env%imag_time_weights_freq_zero)) DEALLOCATE (bs_env%imag_time_weights_freq_zero)
       IF (ALLOCATED(bs_env%imag_freq_points)) DEALLOCATE (bs_env%imag_freq_points)
       IF (ALLOCATED(bs_env%eigenval_scf_Gamma)) DEALLOCATE (bs_env%eigenval_scf_Gamma)
       IF (ALLOCATED(bs_env%eigenval_scf)) DEALLOCATE (bs_env%eigenval_scf)
@@ -341,6 +343,7 @@ CONTAINS
       CALL cp_fm_release(bs_env%fm_RI_RI)
       CALL cp_fm_release(bs_env%fm_chi_Gamma_freq)
       CALL cp_fm_release(bs_env%fm_W_MIC_freq)
+      CALL cp_fm_release(bs_env%fm_W_MIC_freq_zero)
       CALL cp_fm_release(bs_env%fm_W_MIC_freq_1_extra)
       CALL cp_fm_release(bs_env%fm_W_MIC_freq_1_no_extra)
       CALL cp_fm_release(bs_env%fm_h_G0W0_Gamma)

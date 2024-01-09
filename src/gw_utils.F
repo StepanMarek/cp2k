@@ -183,7 +183,9 @@ CONTAINS
       ! 2. consume a lot of memory and should not be kept until the quantity is
       !    deallocated in bs_env_release
 
-      IF (ASSOCIATED(bs_env%nl_3c%ij_list)) CALL neighbor_list_3c_destroy(bs_env%nl_3c)
+      ! TODO : Only retain in case of rt_tdagw
+      ! IF (ASSOCIATED(bs_env%nl_3c%ij_list)) CALL neighbor_list_3c_destroy(bs_env%nl_3c)
+      IF (ASSOCIATED(bs_env%nl_3c%ij_list)) PRINT *, "Retaining nl_3c"
 
       CALL cp_libint_static_cleanup()
 
@@ -622,6 +624,7 @@ CONTAINS
 
       ALLOCATE (bs_env%imag_freq_points(num_time_freq_points))
       ALLOCATE (bs_env%imag_time_points(num_time_freq_points))
+      ALLOCATE (bs_env%imag_time_weights_freq_zero(num_time_freq_points))
       ALLOCATE (bs_env%weights_cos_t_to_w(num_time_freq_points, num_time_freq_points))
       ALLOCATE (bs_env%weights_cos_w_to_t(num_time_freq_points, num_time_freq_points))
       ALLOCATE (bs_env%weights_sin_t_to_w(num_time_freq_points, num_time_freq_points))
@@ -1613,6 +1616,7 @@ CONTAINS
       END IF
 
       bs_env%imag_time_points(:) = points_and_weights(1:num_time_freq_points)/(2.0_dp*E_min)
+      bs_env%imag_time_weights_freq_zero(:) = points_and_weights(num_time_freq_points+1:)/(2.0_dp*E_min)
 
       DEALLOCATE (points_and_weights)
 

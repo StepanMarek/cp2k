@@ -97,7 +97,8 @@ MODULE gw_methods
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'gw_methods'
 
-   PUBLIC :: gw
+   PUBLIC :: gw,&
+             compute_3c_integrals
 
 CONTAINS
 
@@ -132,7 +133,7 @@ CONTAINS
       ! χ_PQ(iτ,k=0) = sum_λν [sum_µ (µν|P) G^occ_µλ(i|τ|)] [sum_σ (σλ|Q) G^vir_σν(i|τ|)]
       CALL get_mat_chi_Gamma_tau(bs_env, qs_env, bs_env%mat_chi_Gamma_tau)
 
-      ! χ_PQ(iτ,k=0) -> χ_PQ(iω,k) -> ε_PQ(iω,k) -> W_PQ(iω,k) -> W^MIC_PQ(iτ)
+      ! χ_PQ(iτ,k=0) -> χ_PQ(iω,k) -> ε_PQ(iω,k) -> W_PQ(iω,k) -> W^MIC_PQ(iτ) -> M^-1*W^MIC*M^-1
       CALL get_W_MIC(bs_env, qs_env, bs_env%mat_chi_Gamma_tau, fm_W_MIC_time)
 
       ! D_µν = sum_n^occ C_µn(k=0) C_νn(k=0), V^trunc_PQ = sum_cell_R <phi_P,0|V^trunc|phi_Q,R>
@@ -1136,6 +1137,20 @@ CONTAINS
       CALL cp_cfm_release(cfm_M_inv_V_sqrt_ikp)
       CALL cp_cfm_release(cfm_V_sqrt_ikp)
       CALL dbcsr_deallocate_matrix_set(mat_chi_Gamma_tau)
+
+      ! Marek : Fourier transform W^MIC(itau) back to get it at a specific im.frequency point - iomega = 0
+      ! TODO : Should this be activeted here or somewhere else? Maybe directly in the main (gw) routine?
+      ! TODO : Add activation dependent on the rt_propagation
+      ! Create the matrix TODO: Add release statement in some well understood place - at destruction of bs_env?
+      CALL cp_fm_create(bs_env%fm_W_MIC_freq_zero, bs_env%fm_W_MIC_freq%matrix_struct)
+      ! Set to zero
+      CALL cp_fm_set_all(bs_env%fm_W_MIC_freq_zero, 0.0_dp)
+      ! Sum over all times
+      DO i_t = 1, bs_env%num_time_freq_points
+         ! Add the relevant structure with correct weight
+         CALL cp_fm_scale_and_add(1.0_dp, bs_env%fm_W_MIC_freq_zero,&
+                                  bs_env%imag_time_weights_freq_zero(i_t), fm_W_MIC_time(i_t))
+      END DO 
 
       IF (bs_env%unit_nr > 0) WRITE (bs_env%unit_nr, '(A)') ' '
 
