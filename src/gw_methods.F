@@ -58,7 +58,8 @@ MODULE gw_methods
                                               local_matrix_to_global_matrix
    USE gw_utils,                        ONLY: create_and_init_bs_env_for_gw,&
                                               de_init_bs_env
-   USE input_constants,                 ONLY: ri_rpa_g0w0_crossing_newton
+   USE input_constants,                 ONLY: ri_rpa_g0w0_crossing_newton,&
+                                              rtp_method_gw
    USE input_section_types,             ONLY: section_vals_type
    USE kinds,                           ONLY: default_string_length,&
                                               dp,&
@@ -1142,15 +1143,17 @@ CONTAINS
       ! TODO : Should this be activeted here or somewhere else? Maybe directly in the main (gw) routine?
       ! TODO : Add activation dependent on the rt_propagation
       ! Create the matrix TODO: Add release statement in some well understood place - at destruction of bs_env?
-      CALL cp_fm_create(bs_env%fm_W_MIC_freq_zero, bs_env%fm_W_MIC_freq%matrix_struct)
-      ! Set to zero
-      CALL cp_fm_set_all(bs_env%fm_W_MIC_freq_zero, 0.0_dp)
-      ! Sum over all times
-      DO i_t = 1, bs_env%num_time_freq_points
-         ! Add the relevant structure with correct weight
-         CALL cp_fm_scale_and_add(1.0_dp, bs_env%fm_W_MIC_freq_zero,&
-                                  bs_env%imag_time_weights_freq_zero(i_t), fm_W_MIC_time(i_t))
-      END DO 
+      IF (bs_env%rtp_method == rtp_method_gw) THEN
+         CALL cp_fm_create(bs_env%fm_W_MIC_freq_zero, bs_env%fm_W_MIC_freq%matrix_struct)
+         ! Set to zero
+         CALL cp_fm_set_all(bs_env%fm_W_MIC_freq_zero, 0.0_dp)
+         ! Sum over all times
+         DO i_t = 1, bs_env%num_time_freq_points
+            ! Add the relevant structure with correct weight
+            CALL cp_fm_scale_and_add(1.0_dp, bs_env%fm_W_MIC_freq_zero,&
+                                     bs_env%imag_time_weights_freq_zero(i_t), fm_W_MIC_time(i_t))
+         END DO 
+      END IF
 
       IF (bs_env%unit_nr > 0) WRITE (bs_env%unit_nr, '(A)') ' '
 

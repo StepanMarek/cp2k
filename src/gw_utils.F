@@ -41,7 +41,8 @@ MODULE gw_utils
         dbt_iterator_next_block, dbt_iterator_start, dbt_iterator_stop, dbt_iterator_type, &
         dbt_mp_environ_pgrid, dbt_pgrid_create, dbt_pgrid_destroy, dbt_pgrid_type, dbt_type
    USE input_constants,                 ONLY: do_potential_truncated,&
-                                              xc_none
+                                              xc_none,&
+                                              rtp_method_gw
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type,&
                                               section_vals_val_get,&
@@ -183,9 +184,11 @@ CONTAINS
       ! 2. consume a lot of memory and should not be kept until the quantity is
       !    deallocated in bs_env_release
 
-      ! TODO : Only retain in case of rt_tdagw
-      ! IF (ASSOCIATED(bs_env%nl_3c%ij_list)) CALL neighbor_list_3c_destroy(bs_env%nl_3c)
-      IF (ASSOCIATED(bs_env%nl_3c%ij_list)) PRINT *, "Retaining nl_3c"
+      IF (ASSOCIATED(bs_env%nl_3c%ij_list) .AND. (bs_env%rtp_method == rtp_method_gw)) THEN
+         PRINT *, "Retaining nl_3c for TD-aGW"
+      ELSE
+         CALL neighbor_list_3c_destroy(bs_env%nl_3c)
+      END IF
 
       CALL cp_libint_static_cleanup()
 
