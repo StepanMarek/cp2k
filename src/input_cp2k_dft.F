@@ -52,7 +52,7 @@ MODULE input_cp2k_dft
       do_admm_charge_constrained_projection, do_admm_exch_scaling_merlot, &
       do_admm_exch_scaling_none, do_admm_purify_cauchy, do_admm_purify_cauchy_subspace, &
       do_admm_purify_mcweeny, do_admm_purify_mo_diag, do_admm_purify_mo_no_diag, &
-      do_admm_purify_none, do_admm_purify_none_dm, do_arnoldi, do_bch, do_cn, &
+      do_admm_purify_none, do_admm_purify_none_dm, do_arnoldi, do_bch, do_exact, do_cn, &
       do_ddapc_constraint, do_ddapc_restraint, do_em, do_etrs, do_full_density, do_gapw_gcs, &
       do_gapw_gct, do_gapw_log, do_iaoloc_energy, do_iaoloc_enone, do_iaoloc_l1, do_iaoloc_occ, &
       do_iaoloc_pm2, do_iaoloc_pm4, do_lri_inv, do_lri_inv_auto, do_lri_opt_all, &
@@ -8541,15 +8541,17 @@ CONTAINS
                           " in the propagator. It is recommended to use BCH when employing density_propagation "// &
                           "and ARNOLDI otherwise.", &
                           usage="MAT_EXP TAYLOR", default_i_val=do_arnoldi, &
-                          enum_c_vals=s2a("TAYLOR", "PADE", "ARNOLDI", "BCH"), &
-                          enum_i_vals=(/do_taylor, do_pade, do_arnoldi, do_bch/), &
+                          enum_c_vals=s2a("TAYLOR", "PADE", "ARNOLDI", "BCH", "EXACT"), &
+                          enum_i_vals=(/do_taylor, do_pade, do_arnoldi, do_bch, do_exact/), &
                           enum_desc=s2a("exponential is evaluated using scaling and squaring in combination"// &
                                         " with a taylor expansion of the exponential.", &
                                         "uses scaling and squaring together with the pade approximation", &
                                         "uses arnoldi subspace algorithm to compute exp(H)*MO directly, can't be used in "// &
                                         "combination with Crank Nicholson or density propagation", &
                                         "Uses a Baker-Campbell-Hausdorff expansion to propagate the density matrix,"// &
-                                        " only works for density propagation"))
+                                        " only works for density propagation",&
+                                        "Uses diagonalisation of the exponent matrices to determine the "//&
+                                        "matrix exponential exactly. Only implemented for TD-aGW."))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
