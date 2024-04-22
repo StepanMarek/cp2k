@@ -25,16 +25,15 @@ caption: Methods
 titlesonly:
 maxdepth: 1
 ---
-methods/dft
-methods/post_hartree_fock
-methods/semiempiricals
-methods/machine_learning
-methods/embedding
-methods/qm_mm
-methods/sampling
-methods/optimization
-methods/spectroscopy
-methods/other_properties
+methods/dft/index
+methods/post_hartree_fock/index
+methods/semiempiricals/index
+methods/machine_learning/index
+methods/embedding/index
+methods/qm_mm/index
+methods/sampling/index
+methods/optimization/index
+methods/properties/index
 ```
 
 % TODO: `{toctree} % :caption: How-to guides % % dummy % `
@@ -58,7 +57,7 @@ caption: Release Versions
 titlesonly:
 maxdepth: 1
 ---
+2024.1 <https://manual.cp2k.org/cp2k-2024_1-branch/index.html>
 2023.2 <https://manual.cp2k.org/cp2k-2023_2-branch/index.html>
-2023.1 <https://manual.cp2k.org/cp2k-2023_1-branch/index.html>
 All versions <versions>
 ```

@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2023 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -37,6 +37,11 @@ static grid_library_config config = {
 #error "OpenMP is required. Please add -fopenmp to your C compiler flags."
 #endif
 
+#if defined(NDEBUG)
+#error                                                                         \
+    "Please do not build CP2K with NDEBUG. There is no performance advantage and asserts will save your neck."
+#endif
+
 /*******************************************************************************
  * \brief Initializes the grid library.
  * \author Ole Schuett
@@ -47,7 +52,7 @@ void grid_library_init(void) {
     abort();
   }
 
-#if defined(__OFFLOAD)
+#if defined(__OFFLOAD) && !defined(__NO_OFFLOAD_GRID)
   // Reserve global GPU memory for storing the intermediate Cab matrix blocks.
   // CUDA does not allow to increase this limit after a kernel was launched.
   // Unfortunately, the required memory is hard to predict because we neither

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -63,11 +63,8 @@ MODULE rt_propagation_utils
                                               pw_zero
    USE pw_pool_types,                   ONLY: pw_pool_p_type,&
                                               pw_pool_type
-   USE pw_types,                        ONLY: COMPLEXDATA1D,&
-                                              REALDATA3D,&
-                                              REALSPACE,&
-                                              RECIPROCALSPACE,&
-                                              pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
    USE qs_collocate_density,            ONLY: calculate_wavefunction
    USE qs_density_matrices,             ONLY: calculate_density_matrix
    USE qs_dftb_matrices,                ONLY: build_dftb_overlap
@@ -266,7 +263,7 @@ CONTAINS
       REAL(KIND=dp)                                      :: alpha, cs_pos
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_fm_type)                                   :: mos_occ
-      TYPE(cp_fm_type), DIMENSION(:), POINTER            :: mos_new, mos_old
+      TYPE(cp_fm_type), DIMENSION(:), POINTER            :: mos_old
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_distribution_type)                      :: dist
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: p_rmpv, rho_new, rho_old
@@ -382,7 +379,7 @@ CONTAINS
             END DO
             CALL calc_update_rho_sparse(qs_env)
          ELSE
-            CALL get_rtp(rtp=rtp, mos_old=mos_old, mos_new=mos_new)
+            CALL get_rtp(rtp=rtp, mos_old=mos_old)
             CALL read_rt_mos_from_restart(mo_array, mos_old, atomic_kind_set, qs_kind_set, particle_set, para_env, &
                                           id_nr, dft_control%multiplicity, dft_section)
             CALL set_uniform_occupation_mo_array(mo_array, nspin)
@@ -743,10 +740,11 @@ CONTAINS
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(particle_list_type), POINTER                  :: particles
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(pw_c1d_gs_type)                               :: wf_g
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_p_type), DIMENSION(:), POINTER        :: pw_pools
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_type)                                      :: density_r, wf_g, wf_r
+      TYPE(pw_r3d_rs_type)                               :: density_r, wf_r
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_subsys_type), POINTER                      :: subsys
       TYPE(section_vals_type), POINTER                   :: dft_section, input
@@ -791,15 +789,9 @@ CONTAINS
       ! Setup the grids needed to compute a wavefunction given a vector
       CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool, &
                       pw_pools=pw_pools)
-      CALL auxbas_pw_pool%create_pw(wf_r, &
-                                    use_data=REALDATA3D, &
-                                    in_space=REALSPACE)
-      CALL auxbas_pw_pool%create_pw(wf_g, &
-                                    use_data=COMPLEXDATA1D, &
-                                    in_space=RECIPROCALSPACE)
-      CALL auxbas_pw_pool%create_pw(density_r, &
-                                    use_data=REALDATA3D, &
-                                    in_space=REALSPACE)
+      CALL auxbas_pw_pool%create_pw(wf_r)
+      CALL auxbas_pw_pool%create_pw(wf_g)
+      CALL auxbas_pw_pool%create_pw(density_r)
       CALL get_rtp(rtp=rtp, mos_new=mos_new)
 
       DO ispin = 1, nspins

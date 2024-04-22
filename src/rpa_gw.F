@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -111,11 +111,8 @@ MODULE rpa_gw
                                               pw_scale,&
                                               pw_zero
    USE pw_pool_types,                   ONLY: pw_pool_type
-   USE pw_types,                        ONLY: COMPLEXDATA1D,&
-                                              REALDATA3D,&
-                                              REALSPACE,&
-                                              RECIPROCALSPACE,&
-                                              pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
    USE qs_band_structure,               ONLY: calculate_kp_orbitals
    USE qs_collocate_density,            ONLY: calculate_rho_elec
    USE qs_environment_types,            ONLY: get_qs_env,&
@@ -776,6 +773,7 @@ CONTAINS
 !> \param jquad ...
 !> \param nmo ...
 !> \param num_fit_points ...
+!> \param num_integ_points ...
 !> \param do_bse ...
 !> \param do_im_time ...
 !> \param do_periodic ...
@@ -803,8 +801,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE compute_GW_self_energy(vec_Sigma_c_gw, dimen_nm_gw, dimen_RI, gw_corr_lev_occ, &
                                      gw_corr_lev_virt, homo, jquad, nmo, num_fit_points, &
-                                     do_bse, do_im_time, do_periodic, first_cycle_periodic_correction, &
-                                     fermi_level_offset, &
+                                     num_integ_points, do_bse, do_im_time, do_periodic, &
+                                     first_cycle_periodic_correction, fermi_level_offset, &
                                      omega, Eigenval, delta_corr, vec_omega_fit_gw, vec_W_gw, wj, &
                                      fm_mat_Q, fm_mat_Q_static_bse, fm_mat_R_gw, fm_mat_S_gw, &
                                      fm_mat_S_gw_work, mo_coeff, para_env, &
@@ -815,7 +813,8 @@ CONTAINS
          DIMENSION(:, :, :, :), INTENT(INOUT)            :: vec_Sigma_c_gw
       INTEGER, INTENT(IN)                                :: dimen_nm_gw, dimen_RI
       INTEGER, DIMENSION(:), INTENT(IN)                  :: gw_corr_lev_occ, gw_corr_lev_virt, homo
-      INTEGER, INTENT(IN)                                :: jquad, nmo, num_fit_points
+      INTEGER, INTENT(IN)                                :: jquad, nmo, num_fit_points, &
+                                                            num_integ_points
       LOGICAL, INTENT(IN)                                :: do_bse, do_im_time, do_periodic
       LOGICAL, INTENT(INOUT) :: first_cycle_periodic_correction
       REAL(KIND=dp), INTENT(INOUT)                       :: fermi_level_offset, omega
@@ -861,7 +860,8 @@ CONTAINS
          ! symmetrize the result, fm_mat_R_gw is only temporary work matrix
          CALL cp_fm_upper_to_full(fm_mat_Q, fm_mat_R_gw)
 
-         IF (do_bse .AND. jquad == 1) THEN
+         ! Omega=0 is at last index, not at jquad==1
+         IF (do_bse .AND. jquad == num_integ_points) THEN
             CALL cp_fm_to_fm(fm_mat_Q, fm_mat_Q_static_bse)
          END IF
 
@@ -1434,7 +1434,8 @@ CONTAINS
                                          do_im_time, mp2_env%ri_g0w0%print_self_energy, count_ev_sc_GW, &
                                          vec_gw_dos, dos_lower_bound, dos_precision, ndos, &
                                          mp2_env%ri_g0w0%min_level_self_energy, &
-                                         mp2_env%ri_g0w0%max_level_self_energy, mp2_env%ri_g0w0%dos_eta)
+                                         mp2_env%ri_g0w0%max_level_self_energy, mp2_env%ri_g0w0%dos_eta, &
+                                         mp2_env%ri_g0w0%dos_min, mp2_env%ri_g0w0%dos_max)
 
                CASE DEFAULT
                   CPABORT("Only two-model and Pade approximation are implemented.")
@@ -1462,7 +1463,8 @@ CONTAINS
                                             mp2_env%ri_g0w0%print_self_energy, count_ev_sc_GW, &
                                             vec_gw_dos, dos_lower_bound, dos_precision, ndos, &
                                             mp2_env%ri_g0w0%min_level_self_energy, &
-                                            mp2_env%ri_g0w0%max_level_self_energy, mp2_env%ri_g0w0%dos_eta)
+                                            mp2_env%ri_g0w0%max_level_self_energy, mp2_env%ri_g0w0%dos_eta, &
+                                            mp2_env%ri_g0w0%dos_min, mp2_env%ri_g0w0%dos_max)
                   CASE DEFAULT
                      CPABORT("Only two-pole model and Pade approximation are implemented.")
                   END SELECT
@@ -2205,10 +2207,10 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'print_local_bandgap'
 
       INTEGER                                            :: handle, i_E
+      TYPE(pw_c1d_gs_type)                               :: rho_g_dummy
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_type)                                      :: E_CBM_rspace, E_gap_rspace, &
-                                                            E_VBM_rspace, rho_g_dummy
-      TYPE(pw_type), ALLOCATABLE, DIMENSION(:)           :: LDOS
+      TYPE(pw_r3d_rs_type)                               :: E_CBM_rspace, E_gap_rspace, E_VBM_rspace
+      TYPE(pw_r3d_rs_type), ALLOCATABLE, DIMENSION(:)    :: LDOS
 
       CALL timeset(routineN, handle)
 
@@ -2246,9 +2248,9 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE calculate_E_gap_rspace(E_gap_rspace, E_VBM_rspace, E_CBM_rspace, rho_g_dummy, &
                                      LDOS, qs_env, Eigenval, gw_corr_lev_occ, gw_corr_lev_virt, homo, dft_gw_char)
-      TYPE(pw_type)                                      :: E_gap_rspace, E_VBM_rspace, &
-                                                            E_CBM_rspace, rho_g_dummy
-      TYPE(pw_type), ALLOCATABLE, DIMENSION(:)           :: LDOS
+      TYPE(pw_r3d_rs_type)                               :: E_gap_rspace, E_VBM_rspace, E_CBM_rspace
+      TYPE(pw_c1d_gs_type)                               :: rho_g_dummy
+      TYPE(pw_r3d_rs_type), ALLOCATABLE, DIMENSION(:)    :: LDOS
       TYPE(qs_environment_type), POINTER                 :: qs_env
       REAL(KIND=dp), DIMENSION(:, :, :), INTENT(IN)      :: Eigenval
       INTEGER                                            :: gw_corr_lev_occ, gw_corr_lev_virt, homo
@@ -2382,12 +2384,12 @@ CONTAINS
 
       END DO
 
-      n_x_start = LBOUND(LDOS(1)%cr3d, 1)
-      n_x_end = UBOUND(LDOS(1)%cr3d, 1)
-      n_y_start = LBOUND(LDOS(1)%cr3d, 2)
-      n_y_end = UBOUND(LDOS(1)%cr3d, 2)
-      n_z_start = LBOUND(LDOS(1)%cr3d, 3)
-      n_z_end = UBOUND(LDOS(1)%cr3d, 3)
+      n_x_start = LBOUND(LDOS(1)%array, 1)
+      n_x_end = UBOUND(LDOS(1)%array, 1)
+      n_y_start = LBOUND(LDOS(1)%array, 2)
+      n_y_end = UBOUND(LDOS(1)%array, 2)
+      n_z_start = LBOUND(LDOS(1)%array, 3)
+      n_z_end = UBOUND(LDOS(1)%array, 3)
 
       CALL pw_zero(E_VBM_rspace)
       CALL pw_zero(E_CBM_rspace)
@@ -2398,28 +2400,28 @@ CONTAINS
                ! compute average occ and virt LDOS
                avg_LDOS_occ = 0.0_dp
                DO i_E = 1, n_E_occ
-                  avg_LDOS_occ = avg_LDOS_occ + LDOS(i_E)%cr3d(i_x, i_y, i_z)
+                  avg_LDOS_occ = avg_LDOS_occ + LDOS(i_E)%array(i_x, i_y, i_z)
                END DO
                avg_LDOS_occ = avg_LDOS_occ/REAL(n_E_occ, KIND=dp)
 
                avg_LDOS_virt = 0.0_dp
                DO i_E = n_E_occ + 1, n_E
-                  avg_LDOS_virt = avg_LDOS_virt + LDOS(i_E)%cr3d(i_x, i_y, i_z)
+                  avg_LDOS_virt = avg_LDOS_virt + LDOS(i_E)%array(i_x, i_y, i_z)
                END DO
                avg_LDOS_virt = avg_LDOS_virt/REAL(n_E - n_E_occ, KIND=dp)
 
                ! compute local valence band maximum (VBM)
                DO i_E = n_E_occ, 1, -1
-                  IF (LDOS(i_E)%cr3d(i_x, i_y, i_z) > mp2_env%ri_g0w0%ldos_thresh_print_loc_bandgap*avg_LDOS_occ) THEN
-                     E_VBM_rspace%cr3d(i_x, i_y, i_z) = E_array(i_E)
+                  IF (LDOS(i_E)%array(i_x, i_y, i_z) > mp2_env%ri_g0w0%ldos_thresh_print_loc_bandgap*avg_LDOS_occ) THEN
+                     E_VBM_rspace%array(i_x, i_y, i_z) = E_array(i_E)
                      EXIT
                   END IF
                END DO
 
                ! compute local valence band maximum (VBM)
                DO i_E = n_E_occ + 1, n_E
-                  IF (LDOS(i_E)%cr3d(i_x, i_y, i_z) > mp2_env%ri_g0w0%ldos_thresh_print_loc_bandgap*avg_LDOS_virt) THEN
-                     E_CBM_rspace%cr3d(i_x, i_y, i_z) = E_array(i_E)
+                  IF (LDOS(i_E)%array(i_x, i_y, i_z) > mp2_env%ri_g0w0%ldos_thresh_print_loc_bandgap*avg_LDOS_virt) THEN
+                     E_CBM_rspace%array(i_x, i_y, i_z) = E_array(i_E)
                      EXIT
                   END IF
                END DO
@@ -2464,7 +2466,7 @@ CONTAINS
 !> \param mp2_env ...
 ! **************************************************************************************************
    SUBROUTINE print_file(pw_print, middle_name, gw_section, particles, mp2_env)
-      TYPE(pw_type)                                      :: pw_print
+      TYPE(pw_r3d_rs_type)                               :: pw_print
       CHARACTER(len=*)                                   :: middle_name
       TYPE(section_vals_type), POINTER                   :: gw_section
       TYPE(particle_list_type), POINTER                  :: particles
@@ -2503,9 +2505,9 @@ CONTAINS
 !> \param qs_env ...
 ! **************************************************************************************************
    SUBROUTINE create_real_space_grids(E_gap_rspace, E_VBM_rspace, E_CBM_rspace, rho_g_dummy, LDOS, auxbas_pw_pool, qs_env)
-      TYPE(pw_type)                                      :: E_gap_rspace, E_VBM_rspace, &
-                                                            E_CBM_rspace, rho_g_dummy
-      TYPE(pw_type), ALLOCATABLE, DIMENSION(:)           :: LDOS
+      TYPE(pw_r3d_rs_type)                               :: E_gap_rspace, E_VBM_rspace, E_CBM_rspace
+      TYPE(pw_c1d_gs_type)                               :: rho_g_dummy
+      TYPE(pw_r3d_rs_type), ALLOCATABLE, DIMENSION(:)    :: LDOS
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
@@ -2521,10 +2523,10 @@ CONTAINS
 
       CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
 
-      CALL auxbas_pw_pool%create_pw(E_gap_rspace, use_data=REALDATA3D, in_space=REALSPACE)
-      CALL auxbas_pw_pool%create_pw(E_VBM_rspace, use_data=REALDATA3D, in_space=REALSPACE)
-      CALL auxbas_pw_pool%create_pw(E_CBM_rspace, use_data=REALDATA3D, in_space=REALSPACE)
-      CALL auxbas_pw_pool%create_pw(rho_g_dummy, use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+      CALL auxbas_pw_pool%create_pw(E_gap_rspace)
+      CALL auxbas_pw_pool%create_pw(E_VBM_rspace)
+      CALL auxbas_pw_pool%create_pw(E_CBM_rspace)
+      CALL auxbas_pw_pool%create_pw(rho_g_dummy)
 
       n_E = INT(mp2_env%ri_g0w0%energy_window_print_loc_bandgap/ &
                 mp2_env%ri_g0w0%energy_spacing_print_loc_bandgap)
@@ -2532,7 +2534,7 @@ CONTAINS
       ALLOCATE (LDOS(n_E))
 
       DO i_E = 1, n_E
-         CALL auxbas_pw_pool%create_pw(LDOS(i_E), use_data=REALDATA3D, in_space=REALSPACE)
+         CALL auxbas_pw_pool%create_pw(LDOS(i_E))
       END DO
 
       CALL timestop(handle)
@@ -4284,6 +4286,8 @@ CONTAINS
 !> \param min_level_self_energy ...
 !> \param max_level_self_energy ...
 !> \param dos_eta ...
+!> \param dos_min ...
+!> \param dos_max ...
 ! **************************************************************************************************
    SUBROUTINE continuation_pade(vec_gw_energ, vec_omega_fit_gw, &
                                 z_value, m_value, vec_Sigma_c_gw, vec_Sigma_x_minus_vxc_gw, &
@@ -4291,7 +4295,7 @@ CONTAINS
                                 num_fit_points, crossing_search, homo, &
                                 fermi_level_offset, do_gw_im_time, print_self_energy, count_ev_sc_GW, &
                                 vec_gw_dos, dos_lower_bound, dos_precision, ndos, &
-                                min_level_self_energy, max_level_self_energy, dos_eta)
+                                min_level_self_energy, max_level_self_energy, dos_eta, dos_min, dos_max)
 
       ! Optional arguments for spectral function
       REAL(KIND=dp), DIMENSION(:), INTENT(INOUT)         :: vec_gw_energ
@@ -4311,6 +4315,7 @@ CONTAINS
       INTEGER, INTENT(IN), OPTIONAL                      :: ndos, min_level_self_energy, &
                                                             max_level_self_energy
       REAL(KIND=dp), OPTIONAL                            :: dos_eta
+      INTEGER, INTENT(IN), OPTIONAL                      :: dos_min, dos_max
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'continuation_pade'
 
@@ -4428,14 +4433,17 @@ CONTAINS
 
             END IF
 
-            vec_gw_dos(idos) = vec_gw_dos(idos) + &
-                               (ABS(AIMAG(sigma_c_pade)) + dos_eta) &
-                               /( &
-                               (omega_dos - Eigenval(n_level_gw_ref) - &
-                                (REAL(sigma_c_pade) + vec_Sigma_x_minus_vxc_gw(n_level_gw_ref)) &
-                                )**2 &
-                               + (ABS(AIMAG(sigma_c_pade)) + dos_eta)**2 &
-                               )
+            IF (n_level_gw_ref >= dos_min .AND. &
+                (n_level_gw_ref <= dos_max .OR. dos_max > 0)) THEN
+               vec_gw_dos(idos) = vec_gw_dos(idos) + &
+                                  (ABS(AIMAG(sigma_c_pade)) + dos_eta) &
+                                  /( &
+                                  (omega_dos - Eigenval_scf(n_level_gw_ref) - &
+                                   (REAL(sigma_c_pade) + vec_Sigma_x_minus_vxc_gw(n_level_gw_ref)) &
+                                   )**2 &
+                                  + (ABS(AIMAG(sigma_c_pade)) + dos_eta)**2 &
+                                  )
+            END IF
 
          END DO
       END IF

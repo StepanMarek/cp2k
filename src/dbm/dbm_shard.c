@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2023 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -170,7 +170,7 @@ dbm_block_t *dbm_shard_lookup(const dbm_shard_t *shard, const int row,
  ******************************************************************************/
 dbm_block_t *dbm_shard_promise_new_block(dbm_shard_t *shard, const int row,
                                          const int col, const int block_size) {
-  // Grow blocks array if nessecary.
+  // Grow blocks array if necessary.
   if (shard->nblocks_allocated < shard->nblocks + 1) {
     shard->nblocks_allocated = ALLOCATION_FACTOR * (shard->nblocks + 1);
     shard->blocks =
@@ -202,7 +202,7 @@ dbm_block_t *dbm_shard_promise_new_block(dbm_shard_t *shard, const int row,
  ******************************************************************************/
 void dbm_shard_allocate_promised_blocks(dbm_shard_t *shard) {
 
-  // Reallocate data array if nessecary.
+  // Reallocate data array if necessary.
   if (shard->data_promised > shard->data_allocated) {
     shard->data_allocated = ALLOCATION_FACTOR * shard->data_promised;
     shard->data = realloc(shard->data, shard->data_allocated * sizeof(double));

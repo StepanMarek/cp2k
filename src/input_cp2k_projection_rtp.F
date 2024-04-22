@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -112,6 +112,16 @@ CONTAINS
                           "If the reference MO is spin independent this key is not used.", &
                           usage="REF_MO_SPIN 1", &
                           default_i_val=1, &
+                          n_var=1, type_of_var=integer_t, repeats=.FALSE.)
+
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="REF_ADD_LUMO", &
+                          description="If the reference MOs include more empty states that are not propagated, "// &
+                         "using this keyword it is possible to read them as well and thus compute the corresponding projection. ", &
+                          usage="REF_ADD_LUMO 10", &
+                          default_i_val=0, &
                           n_var=1, type_of_var=integer_t, repeats=.FALSE.)
 
       CALL section_add_keyword(section, keyword)

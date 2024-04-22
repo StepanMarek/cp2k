@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -87,11 +87,8 @@ MODULE qs_tddfpt2_fhxc_forces
    USE pw_poisson_methods,              ONLY: pw_poisson_solve
    USE pw_poisson_types,                ONLY: pw_poisson_type
    USE pw_pool_types,                   ONLY: pw_pool_type
-   USE pw_types,                        ONLY: COMPLEXDATA1D,&
-                                              REALDATA3D,&
-                                              REALSPACE,&
-                                              RECIPROCALSPACE,&
-                                              pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
    USE qs_collocate_density,            ONLY: calculate_rho_elec
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type,&
@@ -175,8 +172,9 @@ CONTAINS
       INTEGER                                            :: handle, iounit, ispin, mspin, myfun, &
                                                             n_rep_hf, nao, nao_aux, natom, nkind, &
                                                             norb, nspins, order
-      LOGICAL :: distribute_fock_matrix, do_admm, do_analytic, do_hfx, do_numeric, gapw, gapw_xc, &
-         hfx_treat_lsd_in_core, is_rks_triplets, s_mstruct_changed, use_virial
+      LOGICAL :: distribute_fock_matrix, do_admm, do_analytic, do_hfx, do_hfxlr, do_hfxsr, &
+         do_numeric, gapw, gapw_xc, hfx_treat_lsd_in_core, is_rks_triplets, s_mstruct_changed, &
+         use_virial
       REAL(KIND=dp)                                      :: eh1, eh1c, eps_delta, eps_fit, focc, &
                                                             fscal, fval, kval, xehartree
       REAL(KIND=dp), DIMENSION(3)                        :: fodeb
@@ -203,15 +201,14 @@ CONTAINS
          POINTER                                         :: sab, sab_aux_fit, sab_orb, sap_oce
       TYPE(oce_matrix_type), POINTER                     :: oce
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(pw_c1d_gs_type)                               :: rhox_tot_gspace, xv_hartree_gspace
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_g_aux, rhox_g, rhox_g_aux, rhoxx_g
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_poisson_type), POINTER                     :: poisson_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_type)                                      :: rhox_tot_gspace, xv_hartree_gspace, &
-                                                            xv_hartree_rspace
-      TYPE(pw_type), DIMENSION(:), POINTER               :: fxc_rho, fxc_tau, gxc_rho, gxc_tau, &
-                                                            rho_g_aux, rho_r_aux, rhox_g, &
-                                                            rhox_g_aux, rhox_r, rhox_r_aux, &
-                                                            rhoxx_g, rhoxx_r
+      TYPE(pw_r3d_rs_type)                               :: xv_hartree_rspace
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: fxc_rho, fxc_tau, gxc_rho, gxc_tau, &
+                                                            rho_r_aux, rhox_r, rhox_r_aux, rhoxx_r
       TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
@@ -237,6 +234,8 @@ CONTAINS
       is_rks_triplets = tddfpt_control%rks_triplets .AND. (nspins == 1)
       CPASSERT(tddfpt_control%kernel == tddfpt_kernel_full)
       do_hfx = tddfpt_control%do_hfx
+      do_hfxsr = tddfpt_control%do_hfxsr
+      do_hfxlr = tddfpt_control%do_hfxlr
       do_admm = tddfpt_control%do_admm
       gapw = dft_control%qs_control%gapw
       gapw_xc = dft_control%qs_control%gapw_xc
@@ -395,13 +394,10 @@ CONTAINS
 
       ALLOCATE (rhox_r(nspins), rhox_g(nspins))
       DO ispin = 1, nspins
-         CALL auxbas_pw_pool%create_pw(rhox_r(ispin), &
-                                       use_data=REALDATA3D, in_space=REALSPACE)
-         CALL auxbas_pw_pool%create_pw(rhox_g(ispin), &
-                                       use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+         CALL auxbas_pw_pool%create_pw(rhox_r(ispin))
+         CALL auxbas_pw_pool%create_pw(rhox_g(ispin))
       END DO
-      CALL auxbas_pw_pool%create_pw(rhox_tot_gspace, &
-                                    use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+      CALL auxbas_pw_pool%create_pw(rhox_tot_gspace)
 
       CALL pw_zero(rhox_tot_gspace)
       DO ispin = 1, nspins
@@ -416,10 +412,8 @@ CONTAINS
       IF (gapw_xc) THEN
          ALLOCATE (rhoxx_r(nspins), rhoxx_g(nspins))
          DO ispin = 1, nspins
-            CALL auxbas_pw_pool%create_pw(rhoxx_r(ispin), &
-                                          use_data=REALDATA3D, in_space=REALSPACE)
-            CALL auxbas_pw_pool%create_pw(rhoxx_g(ispin), &
-                                          use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+            CALL auxbas_pw_pool%create_pw(rhoxx_r(ispin))
+            CALL auxbas_pw_pool%create_pw(rhoxx_g(ispin))
          END DO
          DO ispin = 1, nspins
             IF (nspins == 2) CALL dbcsr_scale(matrix_px1(ispin)%matrix, 2.0_dp)
@@ -433,10 +427,8 @@ CONTAINS
       CALL get_qs_env(qs_env, matrix_s=matrix_s, force=force)
 
       IF (.NOT. is_rks_triplets) THEN
-         CALL auxbas_pw_pool%create_pw(xv_hartree_rspace, &
-                                       use_data=REALDATA3D, in_space=REALSPACE)
-         CALL auxbas_pw_pool%create_pw(xv_hartree_gspace, &
-                                       use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+         CALL auxbas_pw_pool%create_pw(xv_hartree_rspace)
+         CALL auxbas_pw_pool%create_pw(xv_hartree_gspace)
          ! calculate associated hartree potential
          IF (gapw) THEN
             CALL pw_axpy(local_rho_set%rho0_mpole%rho0_s_gs, rhox_tot_gspace)
@@ -682,10 +674,8 @@ CONTAINS
             ! rhox_aux
             ALLOCATE (rhox_r_aux(nspins), rhox_g_aux(nspins))
             DO ispin = 1, nspins
-               CALL auxbas_pw_pool%create_pw(rhox_r_aux(ispin), &
-                                             use_data=REALDATA3D, in_space=REALSPACE)
-               CALL auxbas_pw_pool%create_pw(rhox_g_aux(ispin), &
-                                             use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+               CALL auxbas_pw_pool%create_pw(rhox_r_aux(ispin))
+               CALL auxbas_pw_pool%create_pw(rhox_g_aux(ispin))
             END DO
             DO ispin = 1, nspins
                CALL calculate_rho_elec(ks_env=ks_env, matrix_p=matrix_px1_admm(ispin)%matrix, &
@@ -791,17 +781,17 @@ CONTAINS
 
                IF (debug_forces) fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1)
                IF (nspins == 1) THEN
-                  CALL update_ks_atom(qs_env, mfx, matrix_px1_admm, forces=.TRUE., tddft=.TRUE., &
+                  CALL update_ks_atom(qs_env, mfx, matrix_px1_admm, forces=.TRUE., &
                                       rho_atom_external=rho_atom_set_f, &
                                       kind_set_external=admm_env%admm_gapw_env%admm_kind_set, &
                                       oce_external=admm_env%admm_gapw_env%oce, sab_external=sab_aux_fit, &
-                                      kintegral=1.0_dp, kforce=0.25_dp)
+                                      kintegral=2.0_dp, kforce=0.5_dp)
                ELSE
-                  CALL update_ks_atom(qs_env, mfx, matrix_px1_admm, forces=.TRUE., tddft=.TRUE., &
+                  CALL update_ks_atom(qs_env, mfx, matrix_px1_admm, forces=.TRUE., &
                                       rho_atom_external=rho_atom_set_f, &
                                       kind_set_external=admm_env%admm_gapw_env%admm_kind_set, &
                                       oce_external=admm_env%admm_gapw_env%oce, sab_external=sab_aux_fit, &
-                                      kintegral=1.0_dp, kforce=0.5_dp)
+                                      kintegral=2.0_dp, kforce=1.0_dp)
                END IF
                IF (debug_forces) THEN
                   fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1) - fodeb(1:3)
@@ -810,17 +800,17 @@ CONTAINS
                END IF
                IF (debug_forces) fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1)
                IF (nspins == 1) THEN
-                  CALL update_ks_atom(qs_env, mgx, matrix_p_admm, forces=.TRUE., tddft=.TRUE., &
+                  CALL update_ks_atom(qs_env, mgx, matrix_p, forces=.TRUE., &
                                       rho_atom_external=rho_atom_set_g, &
                                       kind_set_external=admm_env%admm_gapw_env%admm_kind_set, &
                                       oce_external=admm_env%admm_gapw_env%oce, sab_external=sab_aux_fit, &
-                                      kintegral=0.5_dp, kforce=0.25_dp)
+                                      kintegral=1.0_dp, kforce=0.5_dp)
                ELSE
-                  CALL update_ks_atom(qs_env, mgx, matrix_p_admm, forces=.TRUE., &
+                  CALL update_ks_atom(qs_env, mgx, matrix_p, forces=.TRUE., &
                                       rho_atom_external=rho_atom_set_g, &
                                       kind_set_external=admm_env%admm_gapw_env%admm_kind_set, &
                                       oce_external=admm_env%admm_gapw_env%oce, sab_external=sab_aux_fit, &
-                                      kintegral=0.5_dp, kforce=0.5_dp)
+                                      kintegral=1.0_dp, kforce=1.0_dp)
                END IF
                IF (debug_forces) THEN
                   fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1) - fodeb(1:3)
@@ -1166,6 +1156,15 @@ CONTAINS
                END IF
             END IF
          END IF
+      END IF
+
+      ! HFX short range
+      IF (do_hfxsr) THEN
+         CPABORT("HFXSR not implemented")
+      END IF
+      ! HFX long range
+      IF (do_hfxlr) THEN
+         CPABORT("HFXLR not implemented")
       END IF
 
       CALL get_qs_env(qs_env, sab_orb=sab_orb)

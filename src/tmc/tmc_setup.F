@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -753,7 +753,7 @@ CONTAINS
          IF (SIZE(r_arr_tmp) .NE. tmc_env%params%dim_per_elem) &
             CPABORT("The entered sub box sizes does not fit in number of dimensions.")
          IF (ANY(r_arr_tmp .LE. 0.0_dp)) &
-            CPABORT("The entered sub box lenghts should be greater than 0.")
+            CPABORT("The entered sub box lengths should be greater than 0.")
          DO itmp = 1, SIZE(tmc_env%params%sub_box_size)
             tmc_env%params%sub_box_size(itmp) = r_arr_tmp(itmp)/au2a
          END DO

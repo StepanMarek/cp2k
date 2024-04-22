@@ -92,6 +92,8 @@ def main() -> None:
                 continue
             if root.startswith("./tools/minimax_tools/1_xData"):
                 continue
+            if root.startswith("./tools/fedora"):
+                continue
             if root.startswith("./data/DFTB/scc"):
                 continue
             if root.startswith("./arch"):
@@ -194,7 +196,7 @@ def process_file(fn: str, allow_modifications: bool) -> None:
         run_local_tool("./tools/doxify/doxify.sh", fn)
         run_prettify(fn)
 
-    if re.match(r".*\.(c|cu|h)$", fn):
+    if re.match(r".*\.(c|cu|cl|h)$", fn):
         run_remote_tool("clangformat", fn)
 
     if re.match(r".*\.(cc|cpp|cxx|hcc|hpp|hxx)$", fn):
@@ -223,6 +225,9 @@ def process_file(fn: str, allow_modifications: bool) -> None:
 
     if re.match(r".*/Makefile", fn):
         run_local_tool("./tools/precommit/format_makefile.py", fn)
+
+    if re.match(r".*\.inp$", fn):
+        run_local_tool("./tools/precommit/format_input_file.py", fn)
 
     run_check_file_properties(fn)
 

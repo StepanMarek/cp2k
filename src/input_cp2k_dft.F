@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -67,7 +67,7 @@ MODULE input_cp2k_dft
       do_se_lr_ewald_gks, do_se_lr_ewald_r3, do_se_lr_none, do_spin_density, do_taylor, &
       ehrenfest, embed_diff, embed_fa, embed_grid_angstrom, embed_grid_bohr, embed_level_shift, &
       embed_none, embed_quasi_newton, embed_resp, embed_steep_desc, eri_method_full_gpw, &
-      eri_method_gpw_ht, eri_operator_coulomb, eri_operator_erf, eri_operator_erfc, &
+      eri_method_gpw_ht, eri_operator_trunc, eri_operator_coulomb, eri_operator_erf, eri_operator_erfc, &
       eri_operator_gaussian, eri_operator_yukawa, gapw_1c_large, gapw_1c_medium, gapw_1c_orb, &
       gapw_1c_small, gapw_1c_very_large, gaussian, general_roks, gto_cartesian, gto_spherical, &
       hf_model, high_spin_roks, history_guess, jacobian_fd1, jacobian_fd1_backward, &
@@ -108,7 +108,8 @@ MODULE input_cp2k_dft
       xas_tp_xfh, xas_tp_xhh, xes_tp_val, &
       no_admm_type, admm1_type, admm2_type, admms_type, admmp_type, admmq_type, &
       rtp_method_tddft, rtp_method_gw, rtp_tdagw_ham_ks, rtp_tdagw_ham_g0w0,&
-      rtp_tdagw_hartree_dbt, rtp_tdagw_hartree_pw
+      rtp_tdagw_hartree_dbt, rtp_tdagw_hartree_pw,&
+      e_dens_total_hard_approx, e_dens_total_density, e_dens_soft_density
    USE input_cp2k_almo, ONLY: create_almo_scf_section
    USE input_cp2k_distribution, ONLY: create_distribution_section
    USE input_cp2k_ec, ONLY: create_ec_section
@@ -311,7 +312,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="AUTO_BASIS", &
-                          description="Specify size of automatically generated auxiliary basis sets: "// &
+                          description="Specify size of automatically generated auxiliary (RI) basis sets: "// &
                           "Options={small,medium,large,huge}", &
                           usage="AUTO_BASIS {basis_type} {basis_size}", &
                           type_of_var=char_t, repeats=.TRUE., n_var=-1, default_c_vals=(/"X", "X"/))
@@ -1144,8 +1145,7 @@ CONTAINS
 
       CALL cp_print_key_section_create(print_key, __LOCATION__, name="E_DENSITY_CUBE", &
                                        description="Controls the printing of cube files with "// &
-                                       "the electronic density and, for LSD "// &
-                                       "calculations, the spin density", &
+                                       "the electronic density and, for LSD calculations, the spin density.", &
                                        print_level=high_print_level, filename="")
       CALL keyword_create(keyword, __LOCATION__, name="stride", &
                           description="The stride (X,Y,Z) used to write the cube file "// &
@@ -1154,21 +1154,29 @@ CONTAINS
                           usage="STRIDE 2 2 2", n_var=-1, default_i_vals=(/2, 2, 2/), type_of_var=integer_t)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
-      CALL keyword_create(keyword, __LOCATION__, &
-                          name="TOTAL_DENSITY", &
-                          description="Print the total electronic density in the case "// &
-                          "of a GAPW run. This keyword has only an effect, "// &
-                          "if PAW atoms are present. The default is to print "// &
-                          "only the soft part of the electronic density and "// &
-                          "to ignore the hard part. NOTE: The total density in "// &
-                          "real space might exhibit unphysical features like "// &
-                          "spikes due to the finite and thus truncated g vector "// &
-                          "expansion", &
-                          usage="TOTAL_DENSITY {logical}", &
-                          repeats=.FALSE., &
-                          n_var=1, &
-                          default_l_val=.FALSE., &
-                          lone_keyword_l_val=.TRUE.)
+
+      CALL keyword_create(keyword, __LOCATION__, name="DENSITY_INCLUDE", &
+                          description="Which parts of the density to include. In GAPW the electronic density "// &
+                          "is divided into a hard and a soft component, and the default (TOTAL_HARD_APPROX) "// &
+                          "is to approximate the hard density as a spherical gaussian and to print the smooth "// &
+                          "density accurately. This avoids potential artefacts originating from the hard density. "// &
+                          "If the TOTAL_DENSITY keyword is used the hard density will be computed more accurately "// &
+                          "but may introduce non-physical features. The SOFT_DENSITY keyword will lead to only the "// &
+                          "soft density being printed. In GPW these options have no effect and the cube file will "// &
+                          "only contain the valence electron density.", &
+                          usage="DENSITY_INCLUDE TOTAL_HARD_APPROX", &
+                          enum_c_vals=s2a("TOTAL_HARD_APPROX", "TOTAL_DENSITY", "SOFT_DENSITY"), &
+                          enum_desc=s2a("Print (hard+soft) density where the hard components shape is approximated", &
+                                        "Print (hard+soft) density. Only has an effect "// &
+                                        "if PAW atoms are present. NOTE: The total "// &
+                                        "in real space might exhibit unphysical features "// &
+                                        "like spikes due to the finite and thus "// &
+                                        "truncated g vector", &
+                                        "Print only the soft density"), &
+                          enum_i_vals=(/e_dens_total_hard_approx, &
+                                        e_dens_total_density, &
+                                        e_dens_soft_density/), &
+                          default_i_val=e_dens_total_hard_approx)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
@@ -1184,7 +1192,7 @@ CONTAINS
                           " The resulting core dansities are needed to compute the form factors."// &
                           " If GAPW the local densities are also given in terms of a Gaussian expansion,"// &
                           " by fitting the difference between local-fhard and local-soft density for each atom."// &
-                          " In this case the keyword TOTAL_DENSITY is set to FALSE", &
+                          " In this case the keyword SOFT_DENSITY is enabled.", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
@@ -1202,7 +1210,12 @@ CONTAINS
                                        description="Controls printing of cube files with "// &
                                        "the total density (electrons+atomic core). Note that "// &
                                        "the value of the total density is positive where the "// &
-                                       "electron density dominates and negative where the core is.", &
+                                       "electron density dominates and negative where the core is. "// &
+                                       "When GPW is enabled this will simply print the combined density "// &
+                                       "of the valence electrons and charge-balanced core. In GAPW the "// &
+                                       "electronic density (hard+soft plus a correction term) is printed "// &
+                                       "together with the charge-balanced core density to produce a complete "// &
+                                       "representation of the total density.", &
                                        print_level=high_print_level, filename="")
       CALL keyword_create(keyword, __LOCATION__, name="stride", &
                           description="The stride (X,Y,Z) used to write the cube file "// &
@@ -1211,6 +1224,7 @@ CONTAINS
                           usage="STRIDE 2 2 2", n_var=-1, default_i_vals=(/2, 2, 2/), type_of_var=integer_t)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
+
       CALL keyword_create(keyword, __LOCATION__, name="APPEND", &
                           description="append the cube files when they already exist", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
@@ -1828,6 +1842,13 @@ CONTAINS
                           description="Calculate detailed atomic decomposition energies.", &
                           usage="DETAILED_ENERGY {logical}", repeats=.FALSE., n_var=1, &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE., type_of_var=logical_t)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="EWALD_ALPHA_PARAMETER", &
+                          description="Calculate Energy Decomposition for a specific alpha value. "// &
+                          "alpha = 1/(2*rc**2), see GTH pseudopotentials.", &
+                          usage="EWALD_ALPHA_PARAMETER alpha", repeats=.FALSE., n_var=1, &
+                          default_r_val=0.0_dp, type_of_var=real_t)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
@@ -5205,9 +5226,13 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="NOTCONV_STOPALL", &
-                          description="If true, it stops higher level of iteration when SCF does not converge", &
-                          usage="NOTCONV_STOPALL logical_value", default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL keyword_create(keyword, __LOCATION__, name="IGNORE_CONVERGENCE_FAILURE", &
+                          description="If true, only a warning is issued if an SCF "// &
+                          "iteration has not converged. By default, a run is aborted "// &
+                          "if the required convergence criteria have not been achieved.", &
+                          usage="IGNORE_CONVERGENCE_FAILURE logical_value", &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -8899,6 +8924,16 @@ CONTAINS
       CALL section_add_subsection(print_section, print_key)
       CALL section_release(print_key)
 
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "E_CONSTITUENTS", &
+                                       description="Print the energy constituents (relevant to RTP) which make up "// &
+                                       "the Total Energy", &
+                                       print_level=high_print_level, common_iter_levels=1, &
+                                       each_iter_names=s2a("MD"), &
+                                       each_iter_values=(/1/), &
+                                       filename="rtp")
+      CALL section_add_subsection(print_section, print_key)
+      CALL section_release(print_key)
+
       CALL section_add_subsection(section, print_section)
       CALL section_release(print_section)
 
@@ -9441,14 +9476,15 @@ CONTAINS
                           description="Operator used in ERI calculation.", &
                           usage="OPERATOR <1/R>", &
                           enum_c_vals=s2a("<1/R>", "<EXP(-A*R)/R>", "<ERF(A*R)/R>", &
-                                          "<ERFC(A*R)/R>", "<EXP(-A*R2)/R>"), &
+                                          "<ERFC(A*R)/R>", "<EXP(-A*R2)/R>", "<H(A-R)/R>"), &
                           enum_i_vals=(/eri_operator_coulomb, eri_operator_yukawa, &
-                                        eri_operator_erf, eri_operator_erfc, eri_operator_gaussian/), &
+                                        eri_operator_erf, eri_operator_erfc, eri_operator_gaussian, eri_operator_trunc/), &
                           enum_desc=s2a("Coulomb operator", &
                                         "Yukawa potential operator", &
                                         "Error function potential operator", &
                                         "Complementary error function potential operator", &
-                                        "Gaussian potential operator"), &
+                                        "Gaussian potential operator", &
+                                        "Truncated Coulomb potential"), &
                           default_i_val=eri_operator_coulomb)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)

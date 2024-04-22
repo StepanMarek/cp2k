@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -267,6 +267,7 @@ CONTAINS
       REAL(kind=dp)                                      :: field(3)
 
       CALL make_field(dft_control, field, qs_env%sim_step, qs_env%sim_time)
+      dft_control%rtp_control%field = field
       dft_control%rtp_control%vec_pot = dft_control%rtp_control%vec_pot - field*qs_env%rtp%dt
       ! Update the vec_pot_initial value for RTP restart:
       dft_control%efield_fields(1)%efield%vec_pot_initial = dft_control%rtp_control%vec_pot

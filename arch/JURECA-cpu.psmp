@@ -3,19 +3,19 @@
 # CP2K arch file for JURECA at FZ Juelich (2 AMD EPYC 7742 CPUs per node)
 #
 # Tested with: GNU 11.3.0, ParaStationMPI, 
-#              ScaLAPACK 2.2.1, OpenBLAS 0.3.24,
+#              ScaLAPACK 2.2.1, OpenBLAS 0.3.26,
 #              FFTW 3.3.10, COSMA 2.6.6,
 #              ELPA 2023.05.001, HDF5 1.14.2,
 #              LIBINT 2.6.0, LIBPEXSI 1.2.0,
 #              LIBXC 6.2.2, LIBVORI 220621,
 #              LIBXSMM 1.17, PLUMED 2.9.0,
-#              SIRIUS 7.4.3, SPGLIB 1.16.2
+#              SIRIUS 7.5.2, SPGLIB 2.3.1
 #
 # Usage: Source this arch file and then run make as instructed.
 #        A full toolchain installation is performed as default.
 #        Replace or adapt the "module add" commands below if needed.
 #
-# Last update: 04.10.2023
+# Last update: 28.03.2024
 #
 # \
    if [ "${0}" = "${BASH_SOURCE}" ]; then \
@@ -32,6 +32,7 @@
    echo "To load the required modules in your batch job script, use:"; \
    echo "   module restore cp2k_jureca_cpu_psmp"; \
    cd tools/toolchain; \
+   rm -rf build; \
    ./install_cp2k_toolchain.sh --enable-cuda=no --install-all -j32 --no-arch-files --with-gcc=system --with-mpich=system; \
    cd ../..; \
    printf "Sourcing ${PWD}/tools/toolchain/install/setup ... "; \
@@ -64,12 +65,12 @@ USE_LIBTORCH   := 1.12.1
 USE_LIBVORI    := 220621
 USE_LIBXC      := 6.2.2
 USE_LIBXSMM    := 1.17
-USE_OPENBLAS   := 0.3.24
+USE_OPENBLAS   := 0.3.26
 USE_PLUMED     := 2.9.0
 USE_QUIP       := 0.9.10
 USE_SCALAPACK  := 2.2.1
-USE_SIRIUS     := 7.4.3
-USE_SPGLIB     := 1.16.2
+USE_SIRIUS     := 7.5.2
+USE_SPGLIB     := 2.3.1
 # Only needed for SIRIUS
 LIBVDWXC_VER   := 0.4.0
 SPFFT_VER      := 1.0.6
@@ -328,10 +329,10 @@ ifneq ($(USE_HDF5),)
    CFLAGS         += -I$(HDF5_INC)
    DFLAGS         += -D__HDF5
    ifeq ($(SHARED), yes)
-      LIBS           += -Wl,-rpath,$(HDF5_LIB) -L$(HDF5_LIB) -lhdf5_fortran -lhdf5_hl -lhdf5
+      LIBS           += -Wl,-rpath,$(HDF5_LIB) -L$(HDF5_LIB) -lhdf5_fortran -lhdf5
    else
       LIBS           += $(HDF5_LIB)/libhdf5_fortran.a
-      LIBS           += $(HDF5_LIB)/libhdf5_hl.a
+      LIBS           += $(HDF5_LIB)/libhdf5_f90cstub.a
       LIBS           += $(HDF5_LIB)/libhdf5.a
    endif
 endif

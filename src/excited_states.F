@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -139,6 +139,7 @@ CONTAINS
             IF (unit_nr > 0) THEN
                WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 27), &
                   " Excited State Energy ", REPEAT("-", 28), "!"
+               WRITE (unit_nr, '(T2,A,T75,I6)') "Results for Excited State Nr.", ABS(ex_env%state)
                WRITE (unit_nr, '(T2,A,T65,F16.10)') "Excitation Energy [Hartree] ", ex_env%evalue
                WRITE (unit_nr, '(T2,A,T65,F16.10)') "Total Energy [Hartree]", energy%total
             END IF

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -20,8 +20,7 @@ MODULE qs_environment
    USE almo_scf_env_methods,            ONLY: almo_scf_env_create
    USE atom_kind_orbitals,              ONLY: calculate_atomic_relkin
    USE atomic_kind_types,               ONLY: atomic_kind_type
-   USE auto_basis,                      ONLY: create_aux_fit_basis_set,&
-                                              create_lri_aux_basis_set,&
+   USE auto_basis,                      ONLY: create_lri_aux_basis_set,&
                                               create_ri_aux_basis_set
    USE basis_set_container_types,       ONLY: add_basis_set_to_container
    USE basis_set_types,                 ONLY: basis_sort_zet,&
@@ -102,7 +101,8 @@ MODULE qs_environment
                                               section_vals_type,&
                                               section_vals_val_get
    USE kg_environment,                  ONLY: kg_env_create
-   USE kinds,                           ONLY: dp
+   USE kinds,                           ONLY: default_string_length,&
+                                              dp
    USE kpoint_methods,                  ONLY: kpoint_env_initialize,&
                                               kpoint_initialize,&
                                               kpoint_initialize_mos
@@ -247,6 +247,7 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: force_env_section, subsys_section
       LOGICAL, INTENT(IN)                                :: use_motion_section
 
+      CHARACTER(LEN=default_string_length)               :: basis_type
       INTEGER                                            :: ikind, method_id, nelectron_total, &
                                                             nkind, nkp_grid(3)
       LOGICAL :: do_admm_rpa, do_ec_hfx, do_et, do_exx, do_hfx, do_kpoints, is_identical, is_semi, &
@@ -399,8 +400,13 @@ CONTAINS
          ! Retrieve particle_set and atomic_kind_set (needed for both kinds of initialization)
          nkp_grid = 1
          IF (do_kpoints) CALL get_kpoint_info(kpoints, nkp_grid=nkp_grid)
+         IF (dft_control%do_admm) THEN
+            basis_type = 'AUX_FIT'
+         ELSE
+            basis_type = 'ORB'
+         END IF
          CALL hfx_create(qs_env%x_data, para_env, hfx_section, atomic_kind_set, &
-                         qs_kind_set, particle_set, dft_control, my_cell, &
+                         qs_kind_set, particle_set, dft_control, my_cell, orb_basis=basis_type, &
                          nelectron_total=nelectron_total, nkp_grid=nkp_grid)
       END IF
 
@@ -427,8 +433,13 @@ CONTAINS
             IF (dft_control%do_admm .AND. .NOT. do_admm_rpa) qs_env%mp2_env%ri_rpa%reuse_hfx = .FALSE.
 
             IF (.NOT. qs_env%mp2_env%ri_rpa%reuse_hfx) THEN
+               IF (do_admm_rpa) THEN
+                  basis_type = 'AUX_FIT'
+               ELSE
+                  basis_type = 'ORB'
+               END IF
                CALL hfx_create(qs_env%mp2_env%ri_rpa%x_data, para_env, rpa_hfx_section, atomic_kind_set, &
-                               qs_kind_set, particle_set, dft_control, my_cell, do_exx=(.NOT. do_admm_rpa), &
+                               qs_kind_set, particle_set, dft_control, my_cell, orb_basis=basis_type, &
                                nelectron_total=nelectron_total)
             ELSE
                qs_env%mp2_env%ri_rpa%x_data => qs_env%x_data
@@ -498,8 +509,13 @@ CONTAINS
             IF (dft_control%do_admm .AND. .NOT. ec_env%do_ec_admm) ec_env%reuse_hfx = .FALSE.
 
             IF (.NOT. ec_env%reuse_hfx) THEN
+               IF (ec_env%do_ec_admm) THEN
+                  basis_type = 'AUX_FIT'
+               ELSE
+                  basis_type = 'ORB'
+               END IF
                CALL hfx_create(ec_env%x_data, para_env, ec_hfx_section, atomic_kind_set, &
-                               qs_kind_set, particle_set, dft_control, my_cell, do_exx=(.NOT. ec_env%do_ec_admm), &
+                               qs_kind_set, particle_set, dft_control, my_cell, orb_basis=basis_type, &
                                nelectron_total=nelectron_total)
             ELSE
                ec_env%x_data => qs_env%x_data
@@ -823,19 +839,15 @@ CONTAINS
       CALL get_qs_kind_set(qs_kind_set, dft_plus_u_atom_present=dft_control%dft_plus_u)
 
       IF (dft_control%do_admm) THEN
-         ! Check if ADMM basis is available, auto-generate if needed
+         ! Check if ADMM basis is available
          CALL get_qs_env(qs_env, nkind=nkind)
          DO ikind = 1, nkind
             NULLIFY (aux_fit_basis)
             qs_kind => qs_kind_set(ikind)
             CALL get_qs_kind(qs_kind, basis_set=aux_fit_basis, basis_type="AUX_FIT")
             IF (.NOT. (ASSOCIATED(aux_fit_basis))) THEN
-               ! AUX_FIT basis set is not yet loaded
-               CALL cp_warn(__LOCATION__, "Automatic Generation of AUX_FIT basis. "// &
-                            "This is experimental code.")
-               ! Generate a default basis
-               CALL create_aux_fit_basis_set(aux_fit_basis, qs_kind, dft_control%auto_basis_aux_fit)
-               CALL add_basis_set_to_container(qs_kind%basis_sets, aux_fit_basis, "AUX_FIT")
+               ! AUX_FIT basis set is not available
+               CPABORT("AUX_FIT basis set is not defined. ")
             END IF
          END DO
       END IF
@@ -940,8 +952,6 @@ CONTAINS
                                 basis_type="RI_AUX")
                IF (.NOT. (ASSOCIATED(ri_aux_basis_set))) THEN
                   ! RI_AUX basis set is not yet loaded
-                  CALL cp_warn(__LOCATION__, "Automatic Generation of RI_AUX basis. "// &
-                               "This is experimental code.")
                   ! Generate a default basis
                   CALL create_ri_aux_basis_set(ri_aux_basis_set, qs_kind, dft_control%auto_basis_ri_aux, basis_sort=sort_basis)
                   CALL add_basis_set_to_container(qs_kind%basis_sets, ri_aux_basis_set, "RI_AUX")
@@ -959,8 +969,6 @@ CONTAINS
             qs_kind => qs_kind_set(ikind)
             CALL get_qs_kind(qs_kind, basis_Set=ri_xas_basis, basis_type="RI_XAS")
             IF (.NOT. ASSOCIATED(ri_xas_basis)) THEN
-               CALL cp_warn(__LOCATION__, "Automatic Generation of RI_XAS basis. "// &
-                            "This is experimental code.")
                ! Generate a default basis
                CALL create_ri_aux_basis_set(ri_xas_basis, qs_kind, dft_control%auto_basis_ri_xas)
                CALL add_basis_set_to_container(qs_kind%basis_sets, ri_xas_basis, "RI_XAS")

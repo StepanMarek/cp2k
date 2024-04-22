@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -44,7 +44,8 @@ MODULE basis_set_container_types
                                                ri_hfx_basis = 115, &
                                                p_lri_aux_basis = 116, &
                                                aux_opt_basis = 117, &
-                                               min_basis = 118
+                                               min_basis = 118, &
+                                               tda_k_basis = 119
 ! **************************************************************************************************
    TYPE basis_set_container_type
       PRIVATE
@@ -120,6 +121,8 @@ CONTAINS
          basis_type_nr = soft_basis
       CASE ("GAPW_1C")
          basis_type_nr = gapw_1c_basis
+      CASE ("TDA_HFX")
+         basis_type_nr = tda_k_basis
       CASE ("MAO")
          basis_type_nr = mao_basis
       CASE ("HARRIS")

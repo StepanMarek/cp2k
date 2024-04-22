@@ -135,24 +135,24 @@ MODULE rt_tdagw
    USE rt_tdagw_types,                  ONLY: tdagw_env_type,&
                                               create_tdagw_env,&
                                               release_tdagw_env
-   USE pw_types,                        ONLY: COMPLEXDATA1D,&
-                                              COMPLEXDATA3D,&
-                                              REALDATA3D,&
-                                              REALSPACE,&
-                                              RECIPROCALSPACE,&
-                                              pw_type
-   USE pw_env_types,                    ONLY: pw_env_get,&
-                                              pw_env_type
-   USE pw_methods,                      ONLY: pw_axpy,&
-                                              pw_scale,&
-                                              pw_transfer,&
-                                              pw_zero
-   USE pw_poisson_methods,              ONLY: pw_poisson_solve
+!   USE pw_types,                        ONLY: COMPLEXDATA1D,&
+!                                              COMPLEXDATA3D,&
+!                                              REALDATA3D,&
+!                                              REALSPACE,&
+!                                              RECIPROCALSPACE,&
+!                                              pw_type
+!   USE pw_env_types,                    ONLY: pw_env_get,&
+!                                              pw_env_type
+!   USE pw_methods,                      ONLY: pw_axpy,&
+!                                              pw_scale,&
+!                                              pw_transfer,&
+!                                              pw_zero
+!   USE pw_poisson_methods,              ONLY: pw_poisson_solve
    USE qs_ks_types,                     ONLY: qs_ks_env_type
-   USE pw_poisson_types,                ONLY: pw_poisson_type
-   USE pw_pool_types,                   ONLY: pw_pool_type
-   USE qs_integrate_potential_product,  ONLY: integrate_v_rspace
-   USE qs_collocate_density,            ONLY: calculate_rho_elec
+!   USE pw_poisson_types,                ONLY: pw_poisson_type
+!   USE pw_pool_types,                   ONLY: pw_pool_type
+!   USE qs_integrate_potential_product,  ONLY: integrate_v_rspace
+!   USE qs_collocate_density,            ONLY: calculate_rho_elec
    USE physcon,                         ONLY: femtoseconds
 
 #include "../base/base_uses.f90"
@@ -229,7 +229,7 @@ CONTAINS
          ! PRINT *, "== Hartree Matrix DBT"
          ! CALL cp_fm_write_formatted(tdagw_env%hartree_orig(1)%matrix, 6)
       ELSEIF ( tdagw_env%hartree_method == rtp_tdagw_hartree_pw ) THEN
-         CALL get_hartree_pw(qs_env, tdagw_env, tdagw_env%rho, tdagw_env%hartree_orig)
+         ! CALL get_hartree_pw(qs_env, tdagw_env, tdagw_env%rho, tdagw_env%hartree_orig)
          ! PRINT *, "== Hartree Matrix PW"
          ! CALL cp_fm_write_formatted(tdagw_env%hartree_orig(1)%matrix, 6)
       ELSE
@@ -522,7 +522,7 @@ CONTAINS
       CALL make_field(tdagw_env%dft_control, tdagw_env%field, tdagw_env%sim_step, tdagw_env%sim_time)
       IF ( tdagw_env%hartree_method == rtp_tdagw_hartree_pw ) THEN
             ! Use the planewave implementation of Hartree
-            CALL get_hartree_pw(qs_env, tdagw_env, rho, tdagw_env%hartree_curr)
+            ! CALL get_hartree_pw(qs_env, tdagw_env, rho, tdagw_env%hartree_curr)
             ! PRINT *, "=== Hartree again"
             ! CALL cp_fm_write_formatted(tdagw_env%hartree_curr(1)%matrix, 6)
       END IF
@@ -568,10 +568,10 @@ CONTAINS
          ELSEIF (tdagw_env%hartree_method == rtp_tdagw_hartree_pw ) THEN
             ! Current Hartree is calculated already before the spin loop
             ! TODO : Redo PW Hartree to have the same interface as DBT Hartree - it should be possible
-            CALL cp_fm_scale_and_add(1.0_dp, tdagw_env%ham_effective(re)%matrix,&
-                                     1.0_dp, tdagw_env%hartree_curr(re)%matrix)
-            CALL cp_fm_scale_and_add(1.0_dp, tdagw_env%ham_effective(im)%matrix,&
-                                     1.0_dp, tdagw_env%hartree_curr(im)%matrix)
+            ! CALL cp_fm_scale_and_add(1.0_dp, tdagw_env%ham_effective(re)%matrix,&
+            !                          1.0_dp, tdagw_env%hartree_curr(re)%matrix)
+            ! CALL cp_fm_scale_and_add(1.0_dp, tdagw_env%ham_effective(im)%matrix,&
+            !                          1.0_dp, tdagw_env%hartree_curr(im)%matrix)
          END IF
          ! Subtract original Hartree, which is purely real
          CALL cp_fm_scale_and_add(1.0_dp, tdagw_env%ham_effective(re)%matrix,&
@@ -1425,94 +1425,94 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 02.2024
 ! **************************************************************************************************
-   SUBROUTINE get_hartree_pw(qs_env, tdagw_env, rho_ao, v_ao)
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(tdagw_env_type)                               :: tdagw_env
-      TYPE(cp_fm_p_type), DIMENSION(:), INTENT(IN)       :: rho_ao
-      TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: v_ao
-      CHARACTER(len=*), PARAMETER                        :: routineN = "get_hartree_pw"
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(pw_env_type), POINTER                         :: pw_env
-      TYPE(qs_ks_env_type), POINTER                      :: qs_ks_env
-      TYPE(pw_poisson_type), POINTER                     :: poisson_env
-      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      INTEGER                                            :: i, re, im, n_spin, handle
-      REAL(kind=dp)                                      :: total_rho
-      ! TODO : Imaginary contributions from Hartree? Are these physical?
-
-      CALL timeset(routineN, handle)
-      ! Get environments and parameters from qs_env
-      CALL get_qs_env(qs_env,&
-                      dft_control=dft_control,&
-                      pw_env=pw_env,&
-                      ks_env=qs_ks_env)
-      n_spin = tdagw_env%n_spin
-      ! Get the task pool and poisson environment to create pw types
-      ! TODO : pw pools are recreated every iteration, which is the same approach as done in qs_ks_update
-      !        compare the memory and efficiency consequences here?
-      CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool, poisson_env=poisson_env)
-      ! Create density due to real and imaginary parts
-      DO i=1,2
-         CALL pw_zero(tdagw_env%rho_gspace_tot(i))
-      END DO
-      @:SPIN_DO(i,re,im,n_spin)
-         ! Prepare the complex rho dbcsr
-         ! CALL cp_fm_to_cfm(rho_ao(re)%matrix, rho_ao(im)%matrix, tdagw_env%complex_workspace(1)%matrix)
-         ! CALL copy_cfm_to_dbcsr(tdagw_env%complex_workspace(1)%matrix, tdagw_env%rho_dbcsr_complex%matrix)
-         CALL copy_fm_to_dbcsr(rho_ao(re)%matrix, tdagw_env%rho_dbcsr)
-         ! Prepare the total density
-         CALL pw_zero(tdagw_env%rho_gspace(1))
-         CALL pw_zero(tdagw_env%rho_rspace(1))
-         ! get the density in rspace and gspace - rho_dbcsr has to be target
-         ! CALL calculate_rho_elec(rho_dbcsr(i)%matrix, rho=rho_rspace(i), rho_gspace=rho_gspace(i),&
-         !                         ks_env=qs_ks_env, total_rho=total_rho)
-         ! PRINT *, "Total rho for spin type ", i, total_rho
-         CALL calculate_rho_elec(tdagw_env%rho_dbcsr, rho=tdagw_env%rho_rspace(1),&
-                                 rho_gspace=tdagw_env%rho_gspace(1),&
-                                 ks_env=qs_ks_env, total_rho=total_rho)
-         ! PRINT *, "Total rho for spin type ", i, total_rho
-         CALL pw_axpy(tdagw_env%rho_gspace(1), tdagw_env%rho_gspace_tot(1))
-         ! Same, but for imag component
-         CALL pw_zero(tdagw_env%rho_gspace(2))
-         CALL pw_zero(tdagw_env%rho_rspace(2))
-         CALL copy_fm_to_dbcsr(rho_ao(im)%matrix, tdagw_env%rho_dbcsr)
-         CALL calculate_rho_elec(tdagw_env%rho_dbcsr, rho=tdagw_env%rho_rspace(2),&
-                                 rho_gspace=tdagw_env%rho_gspace(2),&
-                                 ks_env=qs_ks_env)
-         ! Do not need rho rspace
-         CALL pw_axpy(tdagw_env%rho_gspace(2), tdagw_env%rho_gspace_tot(2))
-      END DO
-      ! Now, evaluate real and imag part of Hartree
-      DO i=1,2
-         CALL pw_zero(tdagw_env%v_hartree_gspace)
-         ! Use the g-space density to determine the Hartree in g-space
-         CALL pw_poisson_solve(poisson_env, tdagw_env%rho_gspace_tot(i), vhartree=tdagw_env%v_hartree_gspace)
-         ! Transfer to real space
-         CALL pw_zero(tdagw_env%v_hartree_rspace)
-         CALL pw_transfer(tdagw_env%v_hartree_gspace, tdagw_env%v_hartree_rspace)
-         ! Scale by volume element
-         CALL pw_scale(tdagw_env%v_hartree_rspace, tdagw_env%v_hartree_rspace%pw_grid%dvol)
-         ! Clearing out the v_dbcsr matrix
-         CALL dbcsr_set(tdagw_env%v_dbcsr%matrix, 0.0_dp)
-         ! integrate in rspace
-         ! Copy high level in order to create relevant blocks (that is all blocks)
-         ! CALL integrate_v_rspace(v_rspace=tdagw_env%v_hartree_rspace, hmat=tdagw_env%v_dbcsr_complex,&
-         !                         pmat=tdagw_env%rho_dbcsr_complex(1), qs_env=qs_env, calculate_forces=.FALSE.)
-         CALL integrate_v_rspace(v_rspace=tdagw_env%v_hartree_rspace, hmat=tdagw_env%v_dbcsr,&
-                                 qs_env=qs_env, calculate_forces=.FALSE.)
-         ! CALL cp_fm_set_all(tdagw_env%rho_workspace(1)%matrix, 0.0_dp)
-         CALL copy_dbcsr_to_fm(tdagw_env%v_dbcsr%matrix, v_ao(i)%matrix)
-      END DO
-      ! TODO : Hartree part is spin independent
-      IF (tdagw_env%n_spin > 1) THEN
-         DO i=2,tdagw_env%n_spin
-            re = 2*i-1
-            im = 2*i
-            CALL cp_fm_to_fm(v_ao(1)%matrix, v_ao(re)%matrix)
-            CALL cp_fm_to_fm(v_ao(2)%matrix, v_ao(im)%matrix)
-         END DO
-      END IF
-
-      CALL timestop(handle)
-   END SUBROUTINE
+!   SUBROUTINE get_hartree_pw(qs_env, tdagw_env, rho_ao, v_ao)
+!      TYPE(qs_environment_type), POINTER                 :: qs_env
+!      TYPE(tdagw_env_type)                               :: tdagw_env
+!      TYPE(cp_fm_p_type), DIMENSION(:), INTENT(IN)       :: rho_ao
+!      TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: v_ao
+!      CHARACTER(len=*), PARAMETER                        :: routineN = "get_hartree_pw"
+!      TYPE(dft_control_type), POINTER                    :: dft_control
+!      TYPE(pw_env_type), POINTER                         :: pw_env
+!      TYPE(qs_ks_env_type), POINTER                      :: qs_ks_env
+!      TYPE(pw_poisson_type), POINTER                     :: poisson_env
+!      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+!      INTEGER                                            :: i, re, im, n_spin, handle
+!      REAL(kind=dp)                                      :: total_rho
+!      ! TODO : Imaginary contributions from Hartree? Are these physical?
+!
+!      CALL timeset(routineN, handle)
+!      ! Get environments and parameters from qs_env
+!      CALL get_qs_env(qs_env,&
+!                      dft_control=dft_control,&
+!                      pw_env=pw_env,&
+!                      ks_env=qs_ks_env)
+!      n_spin = tdagw_env%n_spin
+!      ! Get the task pool and poisson environment to create pw types
+!      ! TODO : pw pools are recreated every iteration, which is the same approach as done in qs_ks_update
+!      !        compare the memory and efficiency consequences here?
+!      CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool, poisson_env=poisson_env)
+!      ! Create density due to real and imaginary parts
+!      DO i=1,2
+!         CALL pw_zero(tdagw_env%rho_gspace_tot(i))
+!      END DO
+!      @:SPIN_DO(i,re,im,n_spin)
+!         ! Prepare the complex rho dbcsr
+!         ! CALL cp_fm_to_cfm(rho_ao(re)%matrix, rho_ao(im)%matrix, tdagw_env%complex_workspace(1)%matrix)
+!         ! CALL copy_cfm_to_dbcsr(tdagw_env%complex_workspace(1)%matrix, tdagw_env%rho_dbcsr_complex%matrix)
+!         CALL copy_fm_to_dbcsr(rho_ao(re)%matrix, tdagw_env%rho_dbcsr)
+!         ! Prepare the total density
+!         CALL pw_zero(tdagw_env%rho_gspace(1))
+!         CALL pw_zero(tdagw_env%rho_rspace(1))
+!         ! get the density in rspace and gspace - rho_dbcsr has to be target
+!         ! CALL calculate_rho_elec(rho_dbcsr(i)%matrix, rho=rho_rspace(i), rho_gspace=rho_gspace(i),&
+!         !                         ks_env=qs_ks_env, total_rho=total_rho)
+!         ! PRINT *, "Total rho for spin type ", i, total_rho
+!         CALL calculate_rho_elec(tdagw_env%rho_dbcsr, rho=tdagw_env%rho_rspace(1),&
+!                                 rho_gspace=tdagw_env%rho_gspace(1),&
+!                                 ks_env=qs_ks_env, total_rho=total_rho)
+!         ! PRINT *, "Total rho for spin type ", i, total_rho
+!         CALL pw_axpy(tdagw_env%rho_gspace(1), tdagw_env%rho_gspace_tot(1))
+!         ! Same, but for imag component
+!         CALL pw_zero(tdagw_env%rho_gspace(2))
+!         CALL pw_zero(tdagw_env%rho_rspace(2))
+!         CALL copy_fm_to_dbcsr(rho_ao(im)%matrix, tdagw_env%rho_dbcsr)
+!         CALL calculate_rho_elec(tdagw_env%rho_dbcsr, rho=tdagw_env%rho_rspace(2),&
+!                                 rho_gspace=tdagw_env%rho_gspace(2),&
+!                                 ks_env=qs_ks_env)
+!         ! Do not need rho rspace
+!         CALL pw_axpy(tdagw_env%rho_gspace(2), tdagw_env%rho_gspace_tot(2))
+!      END DO
+!      ! Now, evaluate real and imag part of Hartree
+!      DO i=1,2
+!         CALL pw_zero(tdagw_env%v_hartree_gspace)
+!         ! Use the g-space density to determine the Hartree in g-space
+!         CALL pw_poisson_solve(poisson_env, tdagw_env%rho_gspace_tot(i), vhartree=tdagw_env%v_hartree_gspace)
+!         ! Transfer to real space
+!         CALL pw_zero(tdagw_env%v_hartree_rspace)
+!         CALL pw_transfer(tdagw_env%v_hartree_gspace, tdagw_env%v_hartree_rspace)
+!         ! Scale by volume element
+!         CALL pw_scale(tdagw_env%v_hartree_rspace, tdagw_env%v_hartree_rspace%pw_grid%dvol)
+!         ! Clearing out the v_dbcsr matrix
+!         CALL dbcsr_set(tdagw_env%v_dbcsr%matrix, 0.0_dp)
+!         ! integrate in rspace
+!         ! Copy high level in order to create relevant blocks (that is all blocks)
+!         ! CALL integrate_v_rspace(v_rspace=tdagw_env%v_hartree_rspace, hmat=tdagw_env%v_dbcsr_complex,&
+!         !                         pmat=tdagw_env%rho_dbcsr_complex(1), qs_env=qs_env, calculate_forces=.FALSE.)
+!         CALL integrate_v_rspace(v_rspace=tdagw_env%v_hartree_rspace, hmat=tdagw_env%v_dbcsr,&
+!                                 qs_env=qs_env, calculate_forces=.FALSE.)
+!         ! CALL cp_fm_set_all(tdagw_env%rho_workspace(1)%matrix, 0.0_dp)
+!         CALL copy_dbcsr_to_fm(tdagw_env%v_dbcsr%matrix, v_ao(i)%matrix)
+!      END DO
+!      ! TODO : Hartree part is spin independent
+!      IF (tdagw_env%n_spin > 1) THEN
+!         DO i=2,tdagw_env%n_spin
+!            re = 2*i-1
+!            im = 2*i
+!            CALL cp_fm_to_fm(v_ao(1)%matrix, v_ao(re)%matrix)
+!            CALL cp_fm_to_fm(v_ao(2)%matrix, v_ao(im)%matrix)
+!         END DO
+!      END IF
+!
+!      CALL timestop(handle)
+!   END SUBROUTINE
 END MODULE rt_tdagw

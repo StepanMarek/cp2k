@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -44,17 +44,17 @@ MODULE qs_scf_initialization
                                               dbcsr_type_no_symmetry,&
                                               dbcsr_type_real_default
    USE input_constants,                 ONLY: &
-        broy_mix, broy_mix_new, cholesky_dbcsr, cholesky_inverse, cholesky_off, &
-        diag_block_davidson, diag_block_krylov, diag_filter_matrix, diag_ot, diag_standard, &
-        direct_p_mix, kerker_mix, multisec_mix, no_mix, ot2cdft, outer_scf_none, plus_u_lowdin, &
-        pulay_mix, wfi_frozen_method_nr, wfi_ps_method_nr, wfi_use_guess_method_nr
+        broy_mix, cholesky_dbcsr, cholesky_inverse, cholesky_off, diag_block_davidson, &
+        diag_block_krylov, diag_filter_matrix, diag_ot, diag_standard, direct_p_mix, kerker_mix, &
+        multisec_mix, no_mix, ot2cdft, outer_scf_none, plus_u_lowdin, pulay_mix, &
+        wfi_frozen_method_nr, wfi_ps_method_nr, wfi_use_guess_method_nr
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type,&
                                               section_vals_val_get
    USE kinds,                           ONLY: dp
    USE kpoint_types,                    ONLY: kpoint_type
    USE message_passing,                 ONLY: mp_para_env_type
-   USE pw_types,                        ONLY: pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type
    USE qmmm_image_charge,               ONLY: conditional_calc_image_matrix
    USE qs_block_davidson_types,         ONLY: block_davidson_allocate,&
                                               block_davidson_env_create
@@ -228,7 +228,7 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_scf_env_type), POINTER                     :: scf_env
 
-      TYPE(pw_type), DIMENSION(:), POINTER               :: rho_g
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_g
       TYPE(qs_rho_type), POINTER                         :: rho
 
       NULLIFY (rho_g)
@@ -239,7 +239,7 @@ CONTAINS
       ELSE
          ! Reallocate mixing store, if the g space grid (cell) has changed
          SELECT CASE (scf_env%mixing_method)
-         CASE (kerker_mix, pulay_mix, broy_mix, broy_mix_new, multisec_mix)
+         CASE (kerker_mix, pulay_mix, broy_mix, multisec_mix)
             IF (ASSOCIATED(scf_env%mixing_store)) THEN
                ! The current mixing_store data structure does not allow for an unique
                ! grid comparison, but the probability that the 1d lengths of the old and
@@ -676,7 +676,7 @@ CONTAINS
       CASE (no_mix)
          scf_env%mixing_method = no_mixing_nr
          scf_env%p_mix_alpha = 1.0_dp
-      CASE (direct_p_mix, kerker_mix, pulay_mix, broy_mix, broy_mix_new, multisec_mix)
+      CASE (direct_p_mix, kerker_mix, pulay_mix, broy_mix, multisec_mix)
          scf_env%mixing_method = scf_control%mixing_method
          mixing_section => section_vals_get_subs_vals(scf_section, "MIXING")
          IF (.NOT. ASSOCIATED(scf_env%mixing_store)) THEN

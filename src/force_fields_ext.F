@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -763,12 +763,13 @@ CONTAINS
          amb_info%torsion_k(i) = cp_unit_to_cp2k(amb_info%torsion_k(i), "kcalmol")
       END DO
 
-      DO i = 1, SIZE(amb_info%raw_torsion_k)
-
-         ! Do some units conversion into internal atomic units
-         amb_info%raw_torsion_phi0(i) = cp_unit_to_cp2k(amb_info%raw_torsion_phi0(i), "rad")
-         amb_info%raw_torsion_k(i) = cp_unit_to_cp2k(amb_info%raw_torsion_k(i), "kcalmol")
-      END DO
+      ! Do some units conversion into internal atomic units
+      IF (ASSOCIATED(amb_info%raw_torsion_phi0)) THEN
+         DO i = 1, SIZE(amb_info%raw_torsion_k)
+            amb_info%raw_torsion_phi0(i) = cp_unit_to_cp2k(amb_info%raw_torsion_phi0(i), "rad")
+            amb_info%raw_torsion_k(i) = cp_unit_to_cp2k(amb_info%raw_torsion_k(i), "kcalmol")
+         END DO
+      END IF
 
       !-----------------------------------------------------------------------------
       ! 4. Converts all the Nonbonded info from the param file here

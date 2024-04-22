@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -63,11 +63,11 @@ MODULE ewald_pw_types
 ! **************************************************************************************************
    TYPE ewald_pw_type
       PRIVATE
-      TYPE(pw_pool_type), POINTER       :: pw_small_pool
-      TYPE(pw_pool_type), POINTER       :: pw_big_pool
-      TYPE(realspace_grid_desc_type), POINTER    :: rs_desc
-      TYPE(pw_poisson_type), POINTER    :: poisson_env
-      TYPE(dg_type), POINTER            :: dg
+      TYPE(pw_pool_type), POINTER       :: pw_small_pool => NULL()
+      TYPE(pw_pool_type), POINTER       :: pw_big_pool => NULL()
+      TYPE(realspace_grid_desc_type), POINTER    :: rs_desc => NULL()
+      TYPE(pw_poisson_type), POINTER    :: poisson_env => NULL()
+      TYPE(dg_type), POINTER            :: dg => NULL()
    END TYPE ewald_pw_type
 
 CONTAINS

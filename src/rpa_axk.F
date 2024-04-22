@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -482,7 +482,7 @@ CONTAINS
       IF (do_hfx) THEN
          ! Retrieve particle_set and atomic_kind_set
          CALL hfx_create(x_data, para_env_sub, hfx_section, atomic_kind_set, &
-                         qs_kind_set, particle_set, dft_control, my_cell, do_exx=.TRUE., &
+                         qs_kind_set, particle_set, dft_control, my_cell, orb_basis='ORB', &
                          nelectron_total=nelectron_total)
       END IF
 

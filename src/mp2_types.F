@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -105,7 +105,7 @@ MODULE mp2_types
       LOGICAL                                            :: big_send = .FALSE.
    END TYPE
 
-   TYPE mp2_gpw_type
+   TYPE mp2_gpw_r3d_rs_type
       REAL(KIND=dp)                                      :: eps_grid = 0.0_dp, &
                                                             eps_filter = 0.0_dp, &
                                                             eps_pgf_orb_S = 0.0_dp
@@ -113,7 +113,7 @@ MODULE mp2_types
       REAL(KIND=dp)                                      :: cutoff = 0.0_dp, &
                                                             relative_cutoff = 0.0_dp
       INTEGER                                            :: size_lattice_sum = 0
-   END TYPE mp2_gpw_type
+   END TYPE mp2_gpw_r3d_rs_type
 
    TYPE ri_mp2_type
       INTEGER                                            :: block_size = 0, &
@@ -220,11 +220,25 @@ MODULE mp2_types
                                                             do_aux_bas_gw = .FALSE.
       REAL(KIND=dp)                                      :: frac_aux_mos = 0.0_dp
       INTEGER                                            :: num_omega_points = 0
-      LOGICAL                                            :: do_bse = .FALSE.
-      INTEGER                                            :: num_z_vectors = 0, &
-                                                            max_iter_bse = 0
-      REAL(KIND=dp)                                      :: eps_min_trans = 0.0_dp
-      LOGICAL                                            :: do_ic_model = .FALSE., &
+      INTEGER                                            :: bse_spin_config = 0, &
+                                                            bse_diag_method = 0, &
+                                                            bse_approx = 0, &
+                                                            num_exc_en = 0, &
+                                                            num_print_exc = 0, &
+                                                            num_add_start_z_space = 0, &
+                                                            fac_max_z_space = 0, &
+                                                            num_new_t = 0, &
+                                                            num_davidson_iter = 0, &
+                                                            davidson_abort_cond = 0
+      REAL(KIND=dp)                                      :: eps_res = 0.0_dp, &
+                                                            eps_exc_en = 0.0_dp, &
+                                                            eps_x = 0.0_dp, &
+                                                            bse_cutoff_occ = 0.0_dp, &
+                                                            bse_cutoff_virt = 0.0_dp, &
+                                                            z_space_energy_cutoff = 0.0_dp
+      LOGICAL                                            :: do_bse = .FALSE., &
+                                                            bse_debug_print = .FALSE., &
+                                                            do_ic_model = .FALSE., &
                                                             print_ic_values = .FALSE.
       REAL(KIND=dp)                                      :: eps_dist = 0.0_dp
       TYPE(one_dim_real_array), DIMENSION(2)             :: ic_corr_list = one_dim_real_array(NULL())
@@ -256,7 +270,9 @@ MODULE mp2_types
                                                             dos_prec = 0.0_dp, &
                                                             dos_eta = 0.0_dp
       INTEGER                                            :: max_level_self_energy = 0, &
-                                                            min_level_self_energy = 0
+                                                            min_level_self_energy = 0, &
+                                                            dos_min = 0, &
+                                                            dos_max = 0
    END TYPE ri_g0w0_type
 
    TYPE ri_basis_opt
@@ -303,7 +319,7 @@ MODULE mp2_types
       TYPE(mp2_laplace_type)                             :: ri_laplace = mp2_laplace_type()
       TYPE(mp2_direct_type)                              :: direct_canonical = mp2_direct_type()
       TYPE(libint_potential_type)                        :: potential_parameter = libint_potential_type()
-      TYPE(mp2_gpw_type)                                 :: mp2_gpw = mp2_gpw_type()
+      TYPE(mp2_gpw_r3d_rs_type)                                 :: mp2_gpw = mp2_gpw_r3d_rs_type()
       TYPE(ri_mp2_type)                                  :: ri_mp2 = ri_mp2_type()
       TYPE(ri_rpa_type)                                  :: ri_rpa = ri_rpa_type()
       ! There is a bug with some older compilers preventing requiring an explicit initialization of allocatable components

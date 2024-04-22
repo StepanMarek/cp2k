@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -32,7 +32,7 @@ MODULE qmmm_types_low
                                               pw_pool_release,&
                                               pw_pool_type,&
                                               pw_pools_dealloc
-   USE pw_types,                        ONLY: pw_type
+   USE pw_types,                        ONLY: pw_r3d_rs_type
    USE qmmm_gaussian_types,             ONLY: qmmm_gaussian_p_type
 #include "./base/base_uses.f90"
 
@@ -94,7 +94,7 @@ MODULE qmmm_types_low
       INTEGER, DIMENSION(:), POINTER :: mm_atom_index
       TYPE(pw_pool_type), POINTER :: pw_pool
       TYPE(pw_grid_type), POINTER :: pw_grid
-      TYPE(pw_type), POINTER :: TabLR
+      TYPE(pw_r3d_rs_type), POINTER :: TabLR
    END TYPE qmmm_per_pot_type
 
    TYPE qmmm_per_pot_p_type

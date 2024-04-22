@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -549,10 +549,11 @@ CONTAINS
 
             gw_corr_lev_occ = mp2_env%ri_g0w0%corr_mos_occ
             gw_corr_lev_virt = mp2_env%ri_g0w0%corr_mos_virt
-            ! if corrected occ/virt levels exceed the number of occ/virt levels,
-            ! correct all occ/virt level energies
-            IF (gw_corr_lev_occ > homo) gw_corr_lev_occ = homo
-            IF (gw_corr_lev_virt > dimen - homo) gw_corr_lev_virt = dimen - homo
+            ! if requested number of occ/virt levels for correction either exceed the number of
+            ! occ/virt levels or the requested number is negative, default to correct all
+            ! occ/virt level energies
+            IF (gw_corr_lev_occ > homo .OR. gw_corr_lev_occ < 0) gw_corr_lev_occ = homo
+            IF (gw_corr_lev_virt > dimen - homo .OR. gw_corr_lev_virt < 0) gw_corr_lev_virt = dimen - homo
             IF (ispin == 1) THEN
                mp2_env%ri_g0w0%corr_mos_occ = gw_corr_lev_occ
                mp2_env%ri_g0w0%corr_mos_virt = gw_corr_lev_virt

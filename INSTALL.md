@@ -243,7 +243,19 @@ tools for the solution of dense linear systems and eigenvalue problems.
 - Add `-D__CUSOLVERMP` to `DFLAGS`
 - Add `-lcusolverMp -lcusolver -lcal -lnvidia-ml` to `LIBS`
 
-### 2m. PEXSI (optional, low scaling SCF method)
+### 2m. DLA-Future (optional, experimental, improved performance for diagonalization on Nvidia and AMD GPUs)
+
+[DLA-Future](https://github.com/eth-cscs/DLA-Future) is a high-performance, distributed-memory,
+GPU-accelerated library that provides tools for the solution of eigenvalue problems, based on the
+[pika](https://pikacpp.org/) runtime.
+
+- DLA-Future replaces the ScaLAPACK `SYEVD` to improve performance of the diagonalization
+- DLA-Future is available at <https://github.com/eth-cscs/DLA-Future>
+- DLA-Future is available via the [Spack](https://packages.spack.io/package.html?name=dla-future)
+  package manager
+- `-D__DLAF` is defined by CMake when `-DCP2K_USE_DLAF=ON`
+
+### 2n. PEXSI (optional, low scaling SCF method)
 
 The Pole EXpansion and Selected Inversion (PEXSI) method requires the PEXSI library and two
 dependencies (ParMETIS or PT-Scotch and SuperLU_DIST).
@@ -274,27 +286,27 @@ METISLIB = -lscotchmetis -lscotch -lscotcherr
 PARMETISLIB = -lptscotchparmetis -lptscotch -lptscotcherr
 ```
 
-### 2n. QUIP (optional, wider range of interaction potentials)
+### 2o. QUIP (optional, wider range of interaction potentials)
 
 QUIP - QUantum mechanics and Interatomic Potentials Support for QUIP can be enabled via the flag
 `-D__QUIP`.
 
 For more information see <http://www.libatoms.org>.
 
-### 2o. PLUMED (optional, enables various enhanced sampling methods)
+### 2p. PLUMED (optional, enables various enhanced sampling methods)
 
 CP2K can be compiled with PLUMED 2.x (`-D__PLUMED2`).
 
 See <https://cp2k.org/howto:install_with_plumed> for full instructions.
 
-### 2p. spglib (optional, crystal symmetries tools)
+### 2q. spglib (optional, crystal symmetries tools)
 
 A library for finding and handling crystal symmetries
 
 - The spglib can be downloaded from <https://github.com/atztogo/spglib>
 - For building CP2K with the spglib add `-D__SPGLIB` to DFLAGS
 
-### 2q. SIRIUS (optional, plane wave calculations)
+### 2r. SIRIUS (optional, plane wave calculations)
 
 SIRIUS is a domain specific library for electronic structure calculations.
 
@@ -303,7 +315,7 @@ SIRIUS is a domain specific library for electronic structure calculations.
 - Add `-D__LIBVDWXC` if support is activated in SIRIUS.
 - See <https://electronic-structure.github.io/SIRIUS-doc/> for more information.
 
-### 2r. FPGA (optional, plane wave FFT calculations)
+### 2s. FPGA (optional, plane wave FFT calculations)
 
 - Use `-D__PW_FPGA` to enable FPGA support for PW (fft) calculations. Currently tested only for
   Intel Stratix 10 and Arria 10 GX1150 FPGAs.
@@ -319,14 +331,14 @@ SIRIUS is a domain specific library for electronic structure calculations.
   `LDFLAGS` and aocl libs to `LIBS`.
 - When building FPGA and OFFLOAD together then `-D__NO_OFFLOAD_PW` must be used.
 
-### 2s. COSMA (Distributed Communication-Optimal Matrix-Matrix Multiplication Algorithm)
+### 2t. COSMA (Distributed Communication-Optimal Matrix-Matrix Multiplication Algorithm)
 
 - COSMA is an alternative for the pdgemm routine included in ScaLAPACK. The library supports both
   CPU and GPUs.
 - Add `-D__COSMA` to the DFLAGS to enable support for COSMA.
 - See <https://github.com/eth-cscs/COSMA> for more information.
 
-### 2t. LibVori (Voronoi Integration for Electrostatic Properties from Electron Density)
+### 2u. LibVori (Voronoi Integration for Electrostatic Properties from Electron Density)
 
 - LibVori is a library which enables the calculation of electrostatic properties (charge, dipole
   vector, quadrupole tensor, etc.) via integration of the total electron density in the Voronoi cell
@@ -337,12 +349,12 @@ SIRIUS is a domain specific library for electronic structure calculations.
   <https://brehm-research.de/bqb> for more information as well as the `bqbtool` to inspect BQB
   files.
 
-### 2u. Torch (Machine Learning Framework needed for NequIP)
+### 2v. Torch (Machine Learning Framework needed for NequIP)
 
 - The C++ API of PyTorch can be downloaded from https://pytorch.org/get-started/locally/.
 - Add `-D__LIBTORCH` to the DFLAGS to enable support for libtorch.
 
-### 2v. ROCM/HIP (Support for AMD GPU)
+### 2w. ROCM/HIP (Support for AMD GPU)
 
 The code for the HIP based grid backend was developed and tested on Mi100 but should work out of the
 box on Nvidia hardware as well.
@@ -352,18 +364,20 @@ box on Nvidia hardware as well.
 - Use `-D__NO_OFFLOAD_DBM` to disable the GPU backend of the sparse tensor library.
 - Use `-D__NO_OFFLOAD_PW` to disable the GPU backend of FFTs and associated gather/scatter
   operations.
+- Add `-D__OFFLOAD_UNIFIED_MEMORY` to enable unified memory support (experimental and only supports
+  Mi250X and above)
 - Add `GPUVER=Mi50, Mi60, Mi100, Mi250`
 - Add `OFFLOAD_CC = hipcc`
 - Add `-lamdhip64` to the `LIBS` variable
 - Add
-  `OFFLOAD_FLAGS = '-fopenmp -m64 -pthread -fPIC -D__GRID_HIP -O2 --offload-arch=gfx908 --rocm-path=$(ROCM_PATH)'`
-  where `ROCM_PATH` is the path where the rocm sdk resides. Architectures Mi250 (gfx90a), Mi100
-  (gfx908), Mi50 (gfx906) the hip backend for the grid library supports nvidia hardware as well. It
-  uses the same code and can be used to validate the backend in case of access to Nvidia hardware
-  only. To get the compilation working, follow the steps above and set the `OFFLOAD_FLAGS` with
-  right `nvcc` parameters (see the cuda section of this document). The environment variable
-  `HIP_PLATFORM` should be set to `HIP_PLATFORM=nvidia` to indicate to hipcc to use the nvcc
-  compiler instead.
+  `OFFLOAD_FLAGS = '-munsafe-fp-atomics -fopenmp -m64 -pthread -fPIC -D__GRID_HIP -O2 --offload-arch=gfx908 --rocm-path=$(ROCM_PATH)'`
+  where `ROCM_PATH` is the path where the rocm sdk resides. Architectures Mi300(A,X) (gfx1103),
+  Mi250 (gfx90a), Mi100 (gfx908), Mi50 (gfx906) the hip backend for the grid library supports nvidia
+  hardware as well. It uses the same code and can be used to validate the backend in case of access
+  to Nvidia hardware only. To get the compilation working, follow the steps above and set the
+  `OFFLOAD_FLAGS` with right `nvcc` parameters (see the cuda section of this document). The
+  environment variable `HIP_PLATFORM` should be set to `HIP_PLATFORM=nvidia` to indicate to hipcc to
+  use the nvcc compiler instead.
 - Specify the C++ compiler (e.g., `CXX = g++`). Remember to set the CXXFLAGS flags to support C++11
   standard and OpenMP.
 - When the HIP backend is enabled for DBCSR using `-D__DBCSR_ACC`, then add `-D__HIP_PLATFORM_AMD__`
@@ -371,48 +385,55 @@ box on Nvidia hardware as well.
 - Use `-D__OFFLOAD_PROFILING` to turn on the AMD ROC TX and Tracer libray. It requires to link
   `-lroctx64 -lroctracer64`.
 
-### 2w. OpenCL Devices
+### 2x. OpenCL Devices
 
-OpenCL devices are currently supported for DBCSR and can cover GPUs and other devices. Kernels can
-be automatically tuned like for the CUDA/HIP backend in DBCSR. Note: the OpenCL backend uses some
-functionality from LIBXSMM (dependency).
+OpenCL devices are currently supported for DBCSR and DBM/DBT, and can cover GPUs and other devices.
+Kernels can be automatically tuned.
 
-- Installing an OpenCL runtime depends on the operating system and the device vendor. Debian for
-  instance brings two packages called `opencl-headers` and `ocl-icd-opencl-dev` which can be present
-  in addition to a vendor-specific installation. The OpenCL header files are only necessary if
-  CP2K/DBCSR is compiled from source. Please note, some implementations ship with outdated OpenCL
-  headers which can prevent using latest features (if an application discovers such features only at
-  compile-time). When building from source, for instance `libOpenCL.so` is sufficient (ICD loader)
-  at link-time. However, an Installable Client Driver (ICD) is finally necessary at runtime.
-- Nvidia CUDA, AMD HIP, and Intel OneAPI are fully equipped with an OpenCL runtime (if
-  `opencl-headers` package is not installed, CPATH can be needed to point into such an installation,
-  similarly `LIBRARY_PATH` for finding `libOpenCL.so` at link-time). Installing a minimal or
-  stand-alone OpenCL is also possible, e.g., following the instructions for Debian (or Ubuntu) as
-  given for every [release](https://github.com/intel/compute-runtime/releases) of the
-  [Intel Compute Runtime](https://github.com/intel/compute-runtime).
-- CP2K's toolchain supports `--enable-opencl` to select DBCSR's OpenCL backend. This can be combined
-  with `--enable-cuda` (`--gpu-ver` is then imposed) to use a GPU for CP2K's grid and DBM/DBT
-  components (no OpenCL support yet).
-- For manually writing an ARCH-file add `-D__OPENCL` and `-D__DBCSR_ACC` to `CFLAGS`, and add
-  `-lOpenCL` to the `LIBS` variable, i.e., `OFFLOAD_CC` and `OFFLOAD_FLAGS` can duplicate `CC` and
-  `CFLAGS` (no special offload compiler needed). Please also set `OFFLOAD_TARGET = opencl` to enable
-  the OpenCL backend in DBCSR. For OpenCL, it is not necessary to specify a GPU version (e.g.,
-  `GPUVER = V100` would map to `exts/dbcsr/src/acc/opencl/smm/params/tune_multiply_V100.csv`). In
-  fact, `GPUVER` limits tuned parameters to the specified GPU, and by default all tuned parameters
-  are embedded (`exts/dbcsr/src/acc/opencl/smm/params/*.csv`) and applied at runtime. If auto-tuned
-  parameters are not available for DBCSR, well-chosen defaults will be used to populate kernels at
-  runtime. Refer to the toolchain method (above) for an ARCH-file that blends, e.g., OpenCL and
-  CUDA.
-- Auto-tuned parameters are embedded into the binary, i.e., CP2K does not rely on a hard-coded
-  location. Setting `OPENCL_LIBSMM_SMM_PARAMS=/path/to/csv-file` environment variable can supply
-  parameters for an already built application, or `OPENCL_LIBSMM_SMM_PARAMS=0` can disable using
-  tuned parameters.
-- The environment variable `ACC_OPENCL_VERBOSE=2` prints information about kernels generated at
-  runtime (and thereby checks the installation).
-- Refer to <https://cp2k.github.io/dbcsr/> for, e.g., environment variables, or how to tune kernels
-  (auto tuned parameters).
+Note: the OpenCL backend uses some functionality from LIBXSMM (dependency). CP2K's offload-library
+serving DBM/DBT and other libraries depends on DBCSR's OpenCL backend.
 
-### 2x. matrix-matrix multiplication offloading on GPU using SPLA
+- Installing OpenCL and preparing the runtime environment
+  - Installing an OpenCL runtime depends on the operating system and the device vendor. Debian for
+    instance brings two packages called `opencl-headers` and `ocl-icd-opencl-dev` which can be
+    present in addition to a vendor-specific installation. The OpenCL header files are only
+    necessary if CP2K/DBCSR is compiled from source. Please note, some implementations ship with
+    outdated OpenCL headers which can prevent using latest features (if an application discovers
+    such features only at compile-time). When building from source, for instance `libOpenCL.so` is
+    sufficient at link-time (ICD loader). However, an Installable Client Driver (ICD) is finally
+    necessary at runtime.
+  - Nvidia CUDA, AMD HIP, and Intel OneAPI are fully equipped with an OpenCL runtime (if
+    `opencl-headers` package is not installed, CPATH can be needed to point into the former
+    installation, similarly `LIBRARY_PATH` for finding `libOpenCL.so` at link-time). Installing a
+    minimal or stand-alone OpenCL is also possible, e.g., following the instructions for Debian (or
+    Ubuntu) as given for every [release](https://github.com/intel/compute-runtime/releases) of the
+    [Intel Compute Runtime](https://github.com/intel/compute-runtime).
+  - The environment variable `ACC_OPENCL_VERBOSE` prints information at runtime of CP2K about
+    kernels generated (`ACC_OPENCL_VERBOSE=2`) or executed (`ACC_OPENCL_VERBOSE=3`) which can be
+    used to check an installation.
+- Building CP2K with OpenCL-based DBCSR
+  - CP2K's toolchain supports `--enable-opencl` to select DBCSR's OpenCL backend. This can be
+    combined with `--enable-cuda` (`--gpu-ver` is then imposed) to use a GPU for CP2K's GRID and PW
+    components (no OpenCL support yet) with DBM's CUDA implementation to be preferred.
+  - For manually writing an ARCH-file, add `-D__OPENCL` and `-D__DBCSR_ACC` to `CFLAGS` and add
+    `-lOpenCL` to the `LIBS` variable, i.e., `OFFLOAD_CC` and `OFFLOAD_FLAGS` can duplicate `CC` and
+    `CFLAGS` (no special offload compiler needed). Please also set `OFFLOAD_TARGET = opencl` to
+    enable the OpenCL backend in DBCSR. For OpenCL, it is not necessary to specify a GPU version
+    (e.g., `GPUVER = V100` would map/limit to
+    `exts/dbcsr/src/acc/opencl/smm/params/tune_multiply_V100.csv`). In fact, `GPUVER` limits tuned
+    parameters to the specified GPU, whereas by default all tuned parameters are embedded
+    (`exts/dbcsr/src/acc/opencl/smm/params/*.csv`) and applied at runtime. If auto-tuned parameters
+    are not available for DBCSR, well-chosen defaults will be used to populate kernels at runtime.
+  - Auto-tuned parameters are embedded into the binary, i.e., CP2K does not rely on a hard-coded
+    location. Setting `OPENCL_LIBSMM_SMM_PARAMS=/path/to/csv-file` environment variable can supply
+    parameters for an already built application, or `OPENCL_LIBSMM_SMM_PARAMS=0` can disable using
+    tuned parameters. Refer to <https://cp2k.github.io/dbcsr/> on how to tune kernels (parameters).
+- Building CP2K with OpenCL-based DBM library
+  - For manually writing an ARCH-file, add `-D__OFFLOAD_OPENCL` to `CFLAGS` in addition to following
+    above instructions for "Building CP2K with OpenCL-based DBCSR". An additional Makefile rule can
+    be necessary to transform OpenCL code into a ressource header file.
+
+### 2y. matrix-matrix multiplication offloading on GPU using SPLA
 
 The SPLA library is a hard dependency of SIRIUS but can also be used as a standalone library. It
 provides a generic interface to the blas gemm family with offloading on GPU. Offloading supports
@@ -424,6 +445,15 @@ functions replacing the dgemm calls with `offload_dgemm` will eventually be offl
 The SPLA library has internal criteria to decide if it is worth to do the operation on GPU or not.
 Calls to `offload_dgemm` also accept pointers on GPU or a combination of them.
 
+### 2y. libgrpp (optional, enables calculations with ECPs)
+
+- libgrpp is a library for the calculation of integrals with GTOs and ECPs
+- The libgrpp library can be found under <https://github.com/aoleynichenko/libgrpp>
+- During the installation, the directories `$(LIBGRPP_DIR)/lib` and `$(LIBGRPP_DIR)/include` are
+  created.
+- Add `-D__LIBGRPP` to DFLAGS, `-I$(LIBGRPP_DIR)/include` to FCFLAGS and
+  `-L$(LIBGRPP_DIR)/lib -llibgrpp` to LIBS
+
 <!---
 ### 2y. LibMaxwell (External Maxwell Solver)
 
@@ -432,6 +462,15 @@ Calls to `offload_dgemm` also accept pointers on GPU or a combination of them.
 - Add `-D__LIBMAXWELL` to DFLAGS to enable support for LibMaxwell.
 - See <https://brehm-research.de> for more information.
 -->
+
+### 2y. DeePMD-kit (optional, wider range of interaction potentials)
+
+DeePMD-kit - Deep Potential Molecular Dyanmics. Support for DeePMD-kit can be enabled via the flag
+`-D__DEEPMD`.
+
+- DeePMD-kit C interface can be downloaded from
+  <https://docs.deepmodeling.com/projects/deepmd/en/master/install/install-from-c-library.html>
+- For more information see <https://github.com/deepmodeling/deepmd-kit.git>.
 
 ## 3. Compile
 
@@ -442,10 +481,6 @@ architectures can be found in [arch folder](./arch/). The names of these files m
 `architecture.version` e.g., [Linux-x86-64-gfortran.sopt](./arch/Linux-x86-64-gfortran.sopt).
 Alternatively, <https://dashboard.cp2k.org> provides sample arch files as part of the testing
 reports (click on the status field, search for 'ARCH-file').
-
-- With -DNDEBUG assertions may be stripped ("compiled out").
-- NDEBUG is the ANSI-conforming symbol name (not \_\_NDEBUG).
-- Regular release builds may carry assertions for safety.
 
 Conventionally, there are six versions:
 
@@ -508,6 +543,7 @@ libraries (see 2.)
 - `-D__parallel -D__SCALAPACK` parallel runs
 - `-D__LIBINT` use LIBINT (needed for HF exchange)
 - `-D__LIBXC` use LIBXC
+- `-D__LIBGRPP` use libgrpp (for calculations with ECPs)
 - `-D__ELPA` use ELPA in place of SYEVD to solve the eigenvalue problem
 - `-D__FFTW3` FFTW version 3 is recommended
 - `-D__MKL` link the MKL library for linear algebra and/or FFT

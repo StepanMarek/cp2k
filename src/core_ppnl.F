@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -485,7 +485,7 @@ CONTAINS
 !$OMP SHARED  (do_kp, basis_set, matrix_h, matrix_l, cell_to_index,&
 !$OMP          sab_orb, matrix_p, sap_int, nkind, eps_ppnl, force, &
 !$OMP          do_dR, deltaR, maxder, nder, &
-!$OMP          locks, virial, use_virial, calculate_forces, do_soc) &
+!$OMP          locks, virial, use_virial, calculate_forces, do_soc, natom) &
 !$OMP PRIVATE (ikind, jkind, iatom, jatom, cell_b, rab, &
 !$OMP          slot, iab, atom_a, f0, irow, icol, h_block, &
 !$OMP          l_block_x, l_block_y, l_block_z, &
@@ -493,7 +493,7 @@ CONTAINS
 !$OMP          found,p_block, iac, ibc, alist_ac, alist_bc, acint, bcint, &
 !$OMP          achint, bchint, alkint, blkint, &
 !$OMP          na, np, nb, katom, j, fa, fb, rbc, rac, &
-!$OMP          kkind, kac, kbc, i, img, hash, iatom8, natom) &
+!$OMP          kkind, kac, kbc, i, img, hash, iatom8) &
 !$OMP REDUCTION (+ : pv_thread, force_thread )
 
 !$OMP SINGLE
@@ -564,6 +564,9 @@ CONTAINS
 
             ! loop over all kinds for projector atom
             IF (ASSOCIATED(h_block)) THEN
+!$             iatom8 = INT(iatom - 1, int_8)*INT(natom, int_8) + INT(jatom, int_8)
+!$             hash = INT(MOD(iatom8, INT(nlock, int_8)) + 1)
+
                DO kkind = 1, nkind
                   iac = ikind + nkind*(kkind - 1)
                   ibc = jkind + nkind*(kkind - 1)
@@ -589,8 +592,6 @@ CONTAINS
                            na = SIZE(acint, 1)
                            np = SIZE(acint, 2)
                            nb = SIZE(bcint, 1)
-!$                         iatom8 = INT(iatom - 1, int_8)*INT(natom, int_8) + INT(jatom, int_8)
-!$                         hash = INT(MOD(iatom8, INT(nlock, int_8)) + 1)
 !$                         CALL omp_set_lock(locks(hash))
                            IF (.NOT. do_dR) THEN
                               IF (iatom <= jatom) THEN

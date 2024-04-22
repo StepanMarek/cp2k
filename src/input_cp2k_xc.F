@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -77,8 +77,7 @@ CONTAINS
 
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="xc_functional", &
-                          description="The xc functional to use. For Functionals "// &
-                          "of the LibXC library use the appropriate section.", &
+                          description="The eXchange-Correlation functional to use.", &
                           n_keywords=0, n_subsections=4, repeats=.FALSE., &
                           citations=(/Ortiz1994, Becke1988, Perdew1996, Zhang1998, Lee1988, &
                                       Heyd2004, Vosko1980, Goedecker1996, Perdew1981, &
@@ -870,26 +869,39 @@ CONTAINS
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="HFX_KERNEL", &
                           description="The hfx kernel to use. Cannot be combined with HF section.", &
-                          n_keywords=1, n_subsections=1, repeats=.FALSE.)
+                          n_keywords=1, n_subsections=2, repeats=.FALSE.)
 
       NULLIFY (subsection, keyword)
-      CALL section_create(subsection, __LOCATION__, name="HFXLR", &
-                          description="Uses the HFXLR (longrange) kernel", &
-                          n_keywords=3, n_subsections=0, repeats=.TRUE.)
-      CALL keyword_create(keyword, __LOCATION__, name="ALPHA", &
-                          description="Value of the alpha parameter (default = 1.19).", &
-                          usage="ALPHA 1.19", default_r_val=1.19_dp)
-      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="DO_HFXSR", &
+                          description="Switch to use the HFXSR (short range) kernel.", &
+                          usage="DO_HFXSR T/F", default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
-      CALL keyword_create(keyword, __LOCATION__, name="BETA", &
-                          description="Value of the beta parameter (default = 0.01).", &
-                          usage="BETA 0.01", default_r_val=0.01_dp)
+      NULLIFY (subsection, keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="HFXSR_PRIMBAS", &
+                          description="Default number of primitives in ADMM basis in HFXSR. "// &
+                          "0 indicates the use of a contracted minimal basis. ", &
+                          usage="HFXSR_PRIMBAS 3", default_i_val=0)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL create_hfx_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
+      CALL section_create(subsection, __LOCATION__, name="HFXLR", &
+                          description="Uses the HFXLR (long range) kernel", &
+                          n_keywords=2, n_subsections=0, repeats=.FALSE.)
+      CALL keyword_create(keyword, __LOCATION__, name="RCUT", &
+                          description="Value of lower range cutoff of interaction [Bohr]", &
+                          usage="RCUT 5.00", default_r_val=6.00_dp, unit_str="bohr")
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="SCALE", &
                           description="Scaling parameter for HFX kernel.", &
-                          usage="SCALE 0.2", default_r_val=1.0_dp)
-      CALL section_add_keyword(section, keyword)
+                          usage="SCALE 0.25", default_r_val=1.00_dp)
+      CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)

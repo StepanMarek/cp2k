@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -54,9 +54,9 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Replace the original implementation of the electric-electronic
-!>        interaction in the lenght gauge. This calculation is no longer done in
+!>        interaction in the length gauge. This calculation is no longer done in
 !>        the grid but using matrices to match the velocity gauge implementation.
-!>        Note: The energy is store in energy%core and computed later on.
+!>        Note: The energy is stored in energy%core and computed later on.
 !> \param qs_env ...
 !> \author Guillaume Le Breton (02.23)
 ! **************************************************************************************************
@@ -234,10 +234,12 @@ CONTAINS
                   CALL get_qs_env(qs_env=qs_env, force=force)
                   force(ikind)%efield(:, iatom) = force(ikind)%efield(:, iatom) - field*zeff
                END IF
+!               END IF
             END DO
 
          END DO
          IF (dft_control%apply_efield_field) energy%efield_core = efield_ener
+!          energy%efield_core = efield_ener
       END IF
       CALL timestop(handle)
    END SUBROUTINE calculate_ecore_efield

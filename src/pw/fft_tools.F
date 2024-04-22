@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -42,7 +42,6 @@ MODULE fft_tools
    USE message_passing,                 ONLY: mp_cart_type,&
                                               mp_comm_null,&
                                               mp_comm_type,&
-                                              mp_para_env_type,&
                                               mp_request_type,&
                                               mp_waitall
    USE offload_api,                     ONLY: offload_free_pinned_mem,&
@@ -214,7 +213,7 @@ CONTAINS
 !>      10.2007 created [Joost VandeVondele]
 ! **************************************************************************************************
    SUBROUTINE finalize_fft(para_env, wisdom_file)
-      TYPE(mp_para_env_type), POINTER                    :: para_env
+      CLASS(mp_comm_type)                    :: para_env
       CHARACTER(LEN=*), INTENT(IN)                       :: wisdom_file
 
 ! release the FFT scratch pool

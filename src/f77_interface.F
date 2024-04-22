@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -26,6 +26,8 @@ MODULE f77_interface
    USE cell_methods,                    ONLY: init_cell
    USE cell_types,                      ONLY: cell_type
    USE cp2k_info,                       ONLY: get_runtime_info
+   USE cp_dlaf_utils_api,               ONLY: cp_dlaf_finalize,&
+                                              cp_dlaf_initialize
    USE cp_error_handling,               ONLY: cp_error_handling_setup
    USE cp_files,                        ONLY: init_preconnection_list,&
                                               open_file
@@ -292,6 +294,8 @@ CONTAINS
          CALL pw_gpu_init()
          CALL grid_library_init()
 
+         CALL cp_dlaf_initialize()
+
          CALL dbm_library_init()
       ELSE
          ierr = cp_failure_level
@@ -327,18 +331,20 @@ CONTAINS
          END DO
          DEALLOCATE (f_envs)
 
+         ! Finalize libraries (Offload)
          CALL dbm_library_finalize()
-
          CALL grid_library_finalize()
-
-         ! Finalize the DBCSR configuration
-         CALL dbcsr_finalize_lib()
          CALL pw_gpu_finalize()
+         ! Finalize the DBCSR library
+         CALL dbcsr_finalize_lib()
+
          CALL mp_para_env_release(default_para_env)
          ierr = 0
          CALL cp_rm_default_logger()
 
-         !   *** deallocate the bibliography ***
+         CALL cp_dlaf_finalize()
+
+         ! Deallocate the bibliography
          CALL remove_all_references()
          CALL rm_timer_env()
          CALL rm_mp_perf_env()

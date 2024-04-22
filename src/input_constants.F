@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2023 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -1230,7 +1230,8 @@ MODULE input_constants
                                                eri_operator_yukawa = 2, &
                                                eri_operator_erf = 3, &
                                                eri_operator_erfc = 4, &
-                                               eri_operator_gaussian = 5
+                                               eri_operator_gaussian = 5, &
+                                               eri_operator_trunc = 6
 
    INTEGER, PARAMETER, PUBLIC               :: do_eri_gpw = 0, &
                                                do_eri_mme = 1, &
@@ -1283,5 +1284,27 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: wfn_mix_orig_occ = 1, &
                                                wfn_mix_orig_virtual = 2, &
                                                wfn_mix_orig_external = 3
+
+   ! DFT%PRINT%E_DENSITY_CUBE density type
+   INTEGER, PARAMETER, PUBLIC               :: e_dens_total_hard_approx = 1, &
+                                               e_dens_total_density = 2, &
+                                               e_dens_soft_density = 3
+   ! BSE spin configuration
+   INTEGER, PARAMETER, PUBLIC               :: bse_singlet = 0, &
+                                               bse_triplet = 1
+
+   ! BSE method of diagonalization (full diagonalization or iteratively)
+   INTEGER, PARAMETER, PUBLIC               :: bse_fulldiag = 0, &
+                                               bse_iterdiag = 1
+
+   ! BSE level of approximation to the ABBA matrix (i.e. with/without TDA)
+   INTEGER, PARAMETER, PUBLIC               :: bse_tda = 0, &
+                                               bse_abba = 1, &
+                                               bse_both = 2
+
+   ! BSE iterative abortion condition
+   INTEGER, PARAMETER, PUBLIC               :: bse_iter_en_cond = 0, &
+                                               bse_iter_res_cond = 1, &
+                                               bse_iter_both_cond = 2
 
 END MODULE input_constants
