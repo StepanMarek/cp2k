@@ -1519,8 +1519,9 @@ CONTAINS
       END DO
 
       ! calculate KS-matrix without XC
-      CALL qs_ks_build_kohn_sham_matrix(qs_env, calculate_forces=.FALSE., just_energy=.FALSE., &
-                                        ext_ks_matrix=mat_ks_without_v_xc)
+      ! DEBUG : Doing TDHF - need to disable matrix calculation?
+      ! CALL qs_ks_build_kohn_sham_matrix(qs_env, calculate_forces=.FALSE., just_energy=.FALSE., &
+      !                                   ext_ks_matrix=mat_ks_without_v_xc)
 
       DO ispin = 1, bs_env%n_spin
          ! transfer dbcsr matrix to fm
@@ -1530,6 +1531,8 @@ CONTAINS
          ! finally compute the xc potential in the AO basis
          CALL cp_fm_scale_and_add(alpha=-1.0_dp, matrix_a=bs_env%fm_V_xc_Gamma(ispin), &
                                   beta=1.0_dp, matrix_b=bs_env%fm_ks_Gamma(ispin))
+         ! DEBUG : Doing TDHF
+         CALL cp_fm_set_all(bs_env%fm_V_xc_Gamma(ispin), 0.0_dp)
       END DO
 
       ! set back the energy
