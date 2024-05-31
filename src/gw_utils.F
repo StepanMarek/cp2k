@@ -100,7 +100,11 @@ MODULE gw_utils
    PRIVATE
 
    PUBLIC :: create_and_init_bs_env_for_gw, de_init_bs_env, get_i_j_atoms, &
-             kpoint_init_cell_index_simple, compute_xkp
+             kpoint_init_cell_index_simple, compute_xkp, setup_AO_and_RI_basis_set,&
+             set_heuristic_parameters, set_parallelization_parameters,&
+             allocate_and_fill_matrices_and_arrays,&
+             get_ri_basis_and_basis_function_indices,&
+             create_tensors
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'gw_utils'
 
