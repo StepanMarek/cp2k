@@ -29,6 +29,7 @@ MODULE rt_tdagw
                                               cp_fm_release,&
                                               cp_fm_get_element,&
                                               cp_fm_set_element,&
+                                              cp_fm_get_info,&
                                               cp_fm_write_formatted
    USE cp_cfm_types,                    ONLY: cp_cfm_type,&
                                               cp_fm_to_cfm,&
@@ -278,6 +279,28 @@ CONTAINS
             CALL cp_fm_scale_and_add(0.0_dp, tdagw_env%sigma_COH(re)%matrix, -1.0_dp, tdagw_env%sigma_SEX(re)%matrix)
             CALL cp_fm_scale_and_add(0.0_dp, tdagw_env%sigma_COH(im)%matrix, -1.0_dp, tdagw_env%sigma_SEX(im)%matrix)
          END DO
+      END IF
+
+      ! Delta kick implementation
+      IF ( tdagw_env%dft_control%rtp_control%apply_delta_pulse ) THEN
+         @:SPIN_DO(j, re, im, tdagw_env%n_spin)
+            ! the propagator matrix is X = sum _ j (- i) S^{-1} e^j M_j
+            ! where e^j is the polarisation/direction vector
+            ! and M_j is the field moment matrix in direction j
+            ! TODO : Assume M_j and S^{-1} purely real, and hence X purely imaginary
+            DO k=1,3
+               CALL parallel_gemm("N", "N", tdagw_env%n_ao, tdagw_env%n_ao, tdagw_env%n_ao,&
+                                 -tdagw_env%dft_control%rtp_control%delta_pulse_scale *&
+                                  tdagw_env%dft_control%rtp_control%delta_pulse_direction(k),&
+                                  tdagw_env%S_inv_fm%matrix, tdagw_env%moments_field(k)%matrix,&
+                                  0.0_dp, tdagw_env%ham_workspace(im)%matrix)
+               CALL cp_fm_set_all(tdagw_env%ham_workspace(re)%matrix, 0.0_dp)
+            END DO
+         END DO
+         ! The effect of the exponential propagation is calculated in series by
+         ! Baker-Campbell-Hausdorff formula
+         CALL bch_propagate(tdagw_env%ham_workspace, tdagw_env%rho, tdagw_env%rho_new, tdagw_env%rho_workspace,&
+                            tdagw_env%exp_accuracy)
       END IF
 
       ! Setup the files
@@ -681,6 +704,102 @@ CONTAINS
       END DO
    END SUBROUTINE
 
+   ! TODO : Integrate into the main workflow, but also into the Delta kick formalism
+   SUBROUTINE bch_propagate(propagator_matrix, target_matrix, result_matrix, workspace, threshold_opt, max_iter_opt)
+      ! Array of real and imaginary parts of the propagator matrix X, such that
+      ! the propagated matrix will follow Y' = e^X Y e^(-X), for each spin
+      TYPE(cp_fm_p_type), DIMENSION(:), INTENT(IN)      :: propagator_matrix
+      ! Matrix Y to be propagated into matrix Y'
+      TYPE(cp_fm_p_type), DIMENSION(:), INTENT(IN)      :: target_matrix
+      ! Matrix Y' is stored here on exit
+      TYPE(cp_fm_p_type), DIMENSION(:), INTENT(OUT)     :: result_matrix, workspace
+      ! Threshold for the metric which decides when to truncate the BCH expansion 
+      REAL(kind=dp), OPTIONAL                           :: threshold_opt
+      INTEGER, OPTIONAL                                 :: max_iter_opt
+      CHARACTER(len=*), PARAMETER                       :: routineN="bch_propagate"
+      REAL(kind=dp)                                     :: threshold, prefactor, metric
+      INTEGER                                           :: max_iter, i, re, im, n_spin, n_ao, k,&
+                                                           w_stride
+      LOGICAL                                           :: converged
+
+      IF (PRESENT(threshold_opt)) THEN
+         threshold = threshold_opt
+      ELSE
+         threshold = 1.0e-10
+      END IF
+
+      IF (PRESENT(max_iter_opt)) THEN
+         max_iter = max_iter_opt
+      ELSE
+         max_iter = 20
+      END IF
+
+      n_spin = SIZE(target_matrix) / 2
+      n_ao = 0
+      CALL cp_fm_get_info(target_matrix(1)%matrix, nrow_global=n_ao)
+      w_stride = 2 * n_spin
+
+      ! Initiate
+      @:SPIN_DO(i, re, im, n_spin)
+         CALL cp_fm_to_fm(target_matrix(re)%matrix, result_matrix(re)%matrix)
+         CALL cp_fm_to_fm(target_matrix(im)%matrix, result_matrix(im)%matrix)
+         CALL cp_fm_to_fm(target_matrix(re)%matrix, workspace(re)%matrix)
+         CALL cp_fm_to_fm(target_matrix(re)%matrix, workspace(im)%matrix)
+      END DO
+
+      ! Start the BCH iterations
+      ! TODO : Spin mixing terms?
+      DO k=1,max_iter
+         prefactor = 1.0_dp/REAL(k, kind=dp)
+         @:SPIN_DO(i, re, im, n_spin)
+            ! Real part
+            CALL parallel_gemm("N", "N", n_ao, n_ao, n_ao,&
+                               prefactor, propagator_matrix(re)%matrix, workspace(re)%matrix,&
+                               0.0_dp, workspace(w_stride+re)%matrix)
+            CALL parallel_gemm("N", "N", n_ao, n_ao, n_ao,&
+                              -prefactor, propagator_matrix(im)%matrix, workspace(im)%matrix,&
+                               1.0_dp, workspace(w_stride+re)%matrix)
+            CALL parallel_gemm("N", "T", n_ao, n_ao, n_ao,&
+                               prefactor, workspace(re)%matrix, propagator_matrix(re)%matrix,&
+                               1.0_dp, workspace(w_stride+re)%matrix)
+            CALL parallel_gemm("N", "T", n_ao, n_ao, n_ao,&
+                               prefactor, workspace(im)%matrix, propagator_matrix(im)%matrix,&
+                               1.0_dp, workspace(w_stride+re)%matrix)
+            ! Imag part
+            CALL parallel_gemm("N", "N", n_ao, n_ao, n_ao,&
+                               prefactor, propagator_matrix(re)%matrix, workspace(im)%matrix,&
+                               0.0_dp, workspace(w_stride+im)%matrix)
+            CALL parallel_gemm("N", "N", n_ao, n_ao, n_ao,&
+                               prefactor, propagator_matrix(im)%matrix, workspace(re)%matrix,&
+                               1.0_dp, workspace(w_stride+im)%matrix)
+            CALL parallel_gemm("N", "T", n_ao, n_ao, n_ao,&
+                              -prefactor, workspace(re)%matrix, propagator_matrix(im)%matrix,&
+                               1.0_dp, workspace(w_stride+im)%matrix)
+            CALL parallel_gemm("N", "T", n_ao, n_ao, n_ao,&
+                               prefactor, workspace(im)%matrix, propagator_matrix(re)%matrix,&
+                               1.0_dp, workspace(w_stride+im)%matrix)
+            ! Add to the result
+            CALL cp_fm_scale_and_add(1.0_dp, result_matrix(re)%matrix, 1.0_dp, workspace(re+w_stride)%matrix)
+            CALL cp_fm_scale_and_add(1.0_dp, result_matrix(im)%matrix, 1.0_dp, workspace(im+w_stride)%matrix)
+            ! Check for convergence, TODO : Apply to all spins, instead of a per-spin basis?
+            CALL cp_fm_set_all(workspace(re)%matrix, 0.0_dp)
+            CALL cp_fm_set_all(workspace(re)%matrix, 0.0_dp)
+         END DO
+         metric = rho_metric(workspace(w_stride+1:), workspace(1:w_stride), n_spin)
+         IF (metric <= threshold) THEN
+            converged = .TRUE.
+            EXIT
+         ELSE
+            @:SPIN_DO(i, re, im, n_spin)
+               CALL cp_fm_to_fm(workspace(re+w_stride)%matrix, workspace(re)%matrix)
+               CALL cp_fm_to_fm(workspace(im+w_stride)%matrix, workspace(im)%matrix)
+            END DO
+         END IF
+      END DO
+      ! TODO : An informative message, maybe about number of terms and convergence
+      CPASSERT(converged)
+   END SUBROUTINE bch_propagate
+
 ! **************************************************************************************************
 !> \brief Updates the density in tdagw_env, using the provided exponential
 !>        The new density is saved to a different matrix, which enables for comparison of matrices
@@ -849,7 +968,8 @@ CONTAINS
          ! Scale by spin degeneracy
          ! S * rho
          CALL parallel_gemm("N", "N", tdagw_env%n_ao, tdagw_env%n_ao, tdagw_env%n_ao,&
-                            tdagw_env%spin_degeneracy, tdagw_env%S_fm%matrix, rho(re)%matrix, 0.0_dp, tdagw_env%rho_workspace(1)%matrix)
+                            tdagw_env%spin_degeneracy, tdagw_env%S_fm%matrix, rho(re)%matrix,&
+                            0.0_dp,tdagw_env%rho_workspace(1)%matrix)
          ! C^T * S * rho
          CALL parallel_gemm("T", "N", tdagw_env%n_ao, tdagw_env%n_ao, tdagw_env%n_ao,&
                             1.0_dp, mos(j), tdagw_env%rho_workspace(1)%matrix, 0.0_dp, tdagw_env%rho_workspace(2)%matrix)
@@ -865,7 +985,8 @@ CONTAINS
          ! Scale by spin degeneracy
          ! S * rho
          CALL parallel_gemm("N", "N", tdagw_env%n_ao, tdagw_env%n_ao, tdagw_env%n_ao,&
-                            tdagw_env%spin_degeneracy, tdagw_env%S_fm%matrix, rho(im)%matrix, 0.0_dp, tdagw_env%rho_workspace(1)%matrix)
+                            tdagw_env%spin_degeneracy, tdagw_env%S_fm%matrix, rho(im)%matrix,&
+                            0.0_dp, tdagw_env%rho_workspace(1)%matrix)
          ! C^T * S * rho
          CALL parallel_gemm("T", "N", tdagw_env%n_ao, tdagw_env%n_ao, tdagw_env%n_ao,&
                             1.0_dp, mos(j), tdagw_env%rho_workspace(1)%matrix, 0.0_dp, tdagw_env%rho_workspace(2)%matrix)
@@ -2036,7 +2157,8 @@ CONTAINS
                      ! Different OMP threads write to different places in memory - should be safe from data race
                      Qvector(ri_offset + i) = Qvector(ri_offset + i) + int_3c(j+bs_env%i_ao_start_from_atom(ind_1)-1,&
                                                                               k+bs_env%i_ao_start_from_atom(ind_2)-1,&
-                                                                              i+bs_env%i_RI_start_from_atom(ind_i)-1) * block_matrix(j,k)
+                                                                              i+bs_env%i_RI_start_from_atom(ind_i)-1)&
+                                                                              * block_matrix(j,k)
                      ! Qvector(ri_offset + i) = Qvector(ri_offset + i) + int_3c(i,j,k) * block_matrix(j,k)
                   END DO
                END DO
