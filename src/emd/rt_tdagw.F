@@ -282,26 +282,26 @@ CONTAINS
       END IF
 
       ! Delta kick implementation
-      IF ( tdagw_env%dft_control%rtp_control%apply_delta_pulse ) THEN
-         @:SPIN_DO(j, re, im, tdagw_env%n_spin)
-            ! the propagator matrix is X = sum _ j (- i) S^{-1} e^j M_j
-            ! where e^j is the polarisation/direction vector
-            ! and M_j is the field moment matrix in direction j
-            ! TODO : Assume M_j and S^{-1} purely real, and hence X purely imaginary
-            DO k=1,3
-               CALL parallel_gemm("N", "N", tdagw_env%n_ao, tdagw_env%n_ao, tdagw_env%n_ao,&
-                                 -tdagw_env%dft_control%rtp_control%delta_pulse_scale *&
-                                  tdagw_env%dft_control%rtp_control%delta_pulse_direction(k),&
-                                  tdagw_env%S_inv_fm%matrix, tdagw_env%moments_field(k)%matrix,&
-                                  0.0_dp, tdagw_env%ham_workspace(im)%matrix)
-               CALL cp_fm_set_all(tdagw_env%ham_workspace(re)%matrix, 0.0_dp)
-            END DO
-         END DO
-         ! The effect of the exponential propagation is calculated in series by
-         ! Baker-Campbell-Hausdorff formula
-         CALL bch_propagate(tdagw_env%ham_workspace, tdagw_env%rho, tdagw_env%rho_new, tdagw_env%rho_workspace,&
-                            tdagw_env%exp_accuracy)
-      END IF
+      ! IF ( tdagw_env%dft_control%rtp_control%apply_delta_pulse ) THEN
+      !    @:SPIN_DO(j, re, im, tdagw_env%n_spin)
+      !       ! the propagator matrix is X = sum _ j (- i) S^{-1} e^j M_j
+      !       ! where e^j is the polarisation/direction vector
+      !       ! and M_j is the field moment matrix in direction j
+      !       ! TODO : Assume M_j and S^{-1} purely real, and hence X purely imaginary
+      !       DO k=1,3
+      !          CALL parallel_gemm("N", "N", tdagw_env%n_ao, tdagw_env%n_ao, tdagw_env%n_ao,&
+      !                            -tdagw_env%dft_control%rtp_control%delta_pulse_scale *&
+      !                             tdagw_env%dft_control%rtp_control%delta_pulse_direction(k),&
+      !                             tdagw_env%S_inv_fm%matrix, tdagw_env%moments_field(k)%matrix,&
+      !                             0.0_dp, tdagw_env%ham_workspace(im)%matrix)
+      !          CALL cp_fm_set_all(tdagw_env%ham_workspace(re)%matrix, 0.0_dp)
+      !       END DO
+      !    END DO
+      !    ! The effect of the exponential propagation is calculated in series by
+      !    ! Baker-Campbell-Hausdorff formula
+      !    CALL bch_propagate(tdagw_env%ham_workspace, tdagw_env%rho, tdagw_env%rho_new, tdagw_env%rho_workspace,&
+      !                       tdagw_env%exp_accuracy)
+      ! END IF
 
       ! Setup the files
       rtp_section => section_vals_get_subs_vals(input, "DFT%REAL_TIME_PROPAGATION")
@@ -708,11 +708,11 @@ CONTAINS
    SUBROUTINE bch_propagate(propagator_matrix, target_matrix, result_matrix, workspace, threshold_opt, max_iter_opt)
       ! Array of real and imaginary parts of the propagator matrix X, such that
       ! the propagated matrix will follow Y' = e^X Y e^(-X), for each spin
-      TYPE(cp_fm_p_type), DIMENSION(:), INTENT(IN)      :: propagator_matrix
+      TYPE(cp_fm_p_type), DIMENSION(:), POINTER         :: propagator_matrix
       ! Matrix Y to be propagated into matrix Y'
-      TYPE(cp_fm_p_type), DIMENSION(:), INTENT(IN)      :: target_matrix
+      TYPE(cp_fm_p_type), DIMENSION(:), POINTER         :: target_matrix
       ! Matrix Y' is stored here on exit
-      TYPE(cp_fm_p_type), DIMENSION(:), INTENT(OUT)     :: result_matrix, workspace
+      TYPE(cp_fm_p_type), DIMENSION(:), POINTER         :: result_matrix, workspace
       ! Threshold for the metric which decides when to truncate the BCH expansion 
       REAL(kind=dp), OPTIONAL                           :: threshold_opt
       INTEGER, OPTIONAL                                 :: max_iter_opt
@@ -741,6 +741,7 @@ CONTAINS
 
       ! Initiate
       @:SPIN_DO(i, re, im, n_spin)
+         PRINT *, "i, re, im, n_spin", i, re, im, n_spin, "target_size", SIZE(target_matrix), "result_size", SIZE(result_matrix)
          CALL cp_fm_to_fm(target_matrix(re)%matrix, result_matrix(re)%matrix)
          CALL cp_fm_to_fm(target_matrix(im)%matrix, result_matrix(im)%matrix)
          CALL cp_fm_to_fm(target_matrix(re)%matrix, workspace(re)%matrix)
