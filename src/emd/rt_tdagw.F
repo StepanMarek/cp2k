@@ -132,6 +132,7 @@ MODULE rt_tdagw
    USE message_passing,                 ONLY: mp_para_env_type
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type
+   USE cell_types,                      ONLY: cell_type
    USE input_constants,                 ONLY: rtp_tdagw_ham_ks,&
                                               rtp_tdagw_ham_g0w0,&
                                               rtp_tdagw_hartree_dbt,&
@@ -161,6 +162,7 @@ MODULE rt_tdagw
 !   USE qs_integrate_potential_product,  ONLY: integrate_v_rspace
 !   USE qs_collocate_density,            ONLY: calculate_rho_elec
    USE physcon,                         ONLY: femtoseconds
+   USE mathconstants,                   ONLY: twopi
 
 #include "../base/base_uses.f90"
 
@@ -186,19 +188,21 @@ CONTAINS
       TYPE(tdagw_env_type)                               :: tdagw_env
       TYPE(rt_prop_type), POINTER                        :: rtp
       TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
+      TYPE(cell_type), POINTER                           :: cell
       TYPE(section_vals_type), POINTER                   :: input, rtp_section
       ! TODO : Maybe complex?
       INTEGER                                            :: i,j,re,im, k
       LOGICAL                                            :: converged
       REAL(kind=dp)                                      :: metric, enum_re, enum_im,&
                                                             idempotence_dev, a_metric_1, a_metric_2
+      REAL(kind=dp), DIMENSION(3)                        :: kvec
       ! TODO : Debug - printing of COHSEX
       INTEGER, DIMENSION(2)                              :: custom_unit
 
       ! ********************** ALLOCATIONS **********************
       CALL create_tdagw_env(tdagw_env, qs_env)
       ! Get the logger unit number, only print if we are the source process
-      CALL get_qs_env(qs_env, bs_env=bs_env, input=input, rtp=rtp)
+      CALL get_qs_env(qs_env, bs_env=bs_env, input=input, rtp=rtp, cell=cell)
       ! TODO : Print a nicer header
       IF (tdagw_env%unit_nr > 0) WRITE(tdagw_env%unit_nr, *) "=== Starting time-dependent adiabatic GW real time propagation ==="
 
@@ -283,16 +287,19 @@ CONTAINS
 
       ! Delta kick implementation
       ! IF ( tdagw_env%dft_control%rtp_control%apply_delta_pulse ) THEN
+      !    kvec(:) = cell%h_inv(1, :)*tdagw_env%dft_control%rtp_control%delta_pulse_direction(1) + &
+      !              cell%h_inv(2, :)*tdagw_env%dft_control%rtp_control%delta_pulse_direction(2) + &
+      !              cell%h_inv(3, :)*tdagw_env%dft_control%rtp_control%delta_pulse_direction(3)
+      !    kvec = kvec*twopi*tdagw_env%dft_control%rtp_control%delta_pulse_scale
+      !    PRINT *, "== k-vector in new delta kick implementation", kvec
       !    @:SPIN_DO(j, re, im, tdagw_env%n_spin)
-      !       ! the propagator matrix is X = sum _ j (- i) S^{-1} e^j M_j
+      !       ! the propagator matrix is X = sum _ j (- i) S^{-1} k^j M_j
       !       ! where e^j is the polarisation/direction vector
       !       ! and M_j is the field moment matrix in direction j
       !       ! TODO : Assume M_j and S^{-1} purely real, and hence X purely imaginary
       !       DO k=1,3
       !          CALL parallel_gemm("N", "N", tdagw_env%n_ao, tdagw_env%n_ao, tdagw_env%n_ao,&
-      !                            -tdagw_env%dft_control%rtp_control%delta_pulse_scale *&
-      !                             tdagw_env%dft_control%rtp_control%delta_pulse_direction(k),&
-      !                             tdagw_env%S_inv_fm%matrix, tdagw_env%moments_field(k)%matrix,&
+      !                            -kvec(k),tdagw_env%S_inv_fm%matrix, tdagw_env%moments_field(k)%matrix,&
       !                             0.0_dp, tdagw_env%ham_workspace(im)%matrix)
       !          CALL cp_fm_set_all(tdagw_env%ham_workspace(re)%matrix, 0.0_dp)
       !       END DO
@@ -301,6 +308,10 @@ CONTAINS
       !    ! Baker-Campbell-Hausdorff formula
       !    CALL bch_propagate(tdagw_env%ham_workspace, tdagw_env%rho, tdagw_env%rho_new, tdagw_env%rho_workspace,&
       !                       tdagw_env%exp_accuracy)
+      !    ! Copy the new density into the starting density
+      !    DO i=1,SIZE(tdagw_env%rho)
+      !       CALL cp_fm_to_fm(tdagw_env%rho_new(i)%matrix, tdagw_env%rho(i)%matrix)
+      !    END DO
       ! END IF
 
       ! Setup the files
