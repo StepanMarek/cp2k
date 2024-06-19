@@ -35,7 +35,8 @@ MODULE gw_utils
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_print_key_generate_filename
    USE dbcsr_api,                       ONLY: dbcsr_create,&
-                                              dbcsr_p_type
+                                              dbcsr_p_type,&
+                                              dbcsr_type_symmetric
    USE dbt_api,                         ONLY: &
         dbt_clear, dbt_create, dbt_destroy, dbt_filter, dbt_iterator_blocks_left, &
         dbt_iterator_next_block, dbt_iterator_start, dbt_iterator_stop, dbt_iterator_type, &
@@ -1486,7 +1487,7 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'compute_fm_V_xc_Gamma'
 
       INTEGER                                            :: handle, ispin, myfun, nimages
-      REAL(KIND=dp)                                      :: energy_ex, energy_exc, energy_total
+      REAL(KIND=dp)                                      :: energy_ex, energy_exc, energy_total, myfraction
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: mat_ks_without_v_xc
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(qs_energy_type), POINTER                      :: energy
@@ -1504,6 +1505,8 @@ CONTAINS
       xc_section => section_vals_get_subs_vals(input, "DFT%XC")
       CALL section_vals_val_get(xc_section, "XC_FUNCTIONAL%_SECTION_PARAMETERS_", i_val=myfun)
       CALL section_vals_val_set(xc_section, "XC_FUNCTIONAL%_SECTION_PARAMETERS_", i_val=xc_none)
+      CALL section_vals_val_get(xc_section, "HF%FRACTION", r_val=myfraction)
+      CALL section_vals_val_set(xc_section, "HF%FRACTION", r_val=0.0_dp)
 
       ! save the energy before the energy gets updated
       energy_total = energy%total
@@ -1515,13 +1518,13 @@ CONTAINS
 
       DO ispin = 1, bs_env%n_spin
          ALLOCATE (mat_ks_without_v_xc(ispin)%matrix)
-         CALL dbcsr_create(mat_ks_without_v_xc(ispin)%matrix, template=bs_env%mat_ao_ao%matrix)
+         CALL dbcsr_create(mat_ks_without_v_xc(ispin)%matrix, template=bs_env%mat_ao_ao%matrix, matrix_type=dbcsr_type_symmetric)
       END DO
 
       ! calculate KS-matrix without XC
       ! DEBUG : Doing TDHF - need to disable matrix calculation?
-      ! CALL qs_ks_build_kohn_sham_matrix(qs_env, calculate_forces=.FALSE., just_energy=.FALSE., &
-      !                                   ext_ks_matrix=mat_ks_without_v_xc)
+      CALL qs_ks_build_kohn_sham_matrix(qs_env, calculate_forces=.FALSE., just_energy=.FALSE., &
+                                        ext_ks_matrix=mat_ks_without_v_xc)
 
       DO ispin = 1, bs_env%n_spin
          ! transfer dbcsr matrix to fm
@@ -1532,7 +1535,7 @@ CONTAINS
          CALL cp_fm_scale_and_add(alpha=-1.0_dp, matrix_a=bs_env%fm_V_xc_Gamma(ispin), &
                                   beta=1.0_dp, matrix_b=bs_env%fm_ks_Gamma(ispin))
          ! DEBUG : Doing TDHF
-         CALL cp_fm_set_all(bs_env%fm_V_xc_Gamma(ispin), 0.0_dp)
+         ! CALL cp_fm_set_all(bs_env%fm_V_xc_Gamma(ispin), 0.0_dp)
       END DO
 
       ! set back the energy
@@ -1546,6 +1549,8 @@ CONTAINS
       ! set the DFT functional and HF fraction back
       CALL section_vals_val_set(xc_section, "XC_FUNCTIONAL%_SECTION_PARAMETERS_", &
                                 i_val=myfun)
+      CALL section_vals_val_set(xc_section, "HF%FRACTION", &
+                                r_val=myfraction)
 
       CALL dbcsr_deallocate_matrix_set(mat_ks_without_v_xc)
 
