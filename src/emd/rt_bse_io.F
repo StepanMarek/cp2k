@@ -558,6 +558,7 @@ CONTAINS
                DO i = 1, 3
                   rtbse_env%moments_trace(i)%series(n) = CMPLX(moments_re(i), moments_im(i), kind=dp)
                END DO
+               rtbse_env%time_trace%series(n) = timestamp
             END DO
             ! Change back to atomic units in the trace
             rtbse_env%time_trace%series(:) = rtbse_env%time_trace%series(:)/femtoseconds
