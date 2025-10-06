@@ -44,7 +44,7 @@ MODULE input_cp2k_dft
         numerical, plus_u_lowdin, plus_u_mulliken, plus_u_mulliken_charges, real_time_propagation, &
         rel_dkh, rel_none, rel_pot_erfc, rel_pot_full, rel_sczora_mp, rel_trans_atom, &
         rel_trans_full, rel_trans_molecule, rel_zora, rel_zora_full, rel_zora_mp, &
-        rtp_bse_ham_g0w0, rtp_bse_ham_ks, rtp_method_bse, rtp_method_tddft, sccs_andreussi, &
+        rtp_bse_ham_g0w0, rtp_bse_ham_ks, rtp_method_bse, rtp_method_tddft, rtp_method_sbe, sccs_andreussi, &
         sccs_derivative_cd3, sccs_derivative_cd5, sccs_derivative_cd7, sccs_derivative_fft, &
         sccs_fattebert_gygi, sic_ad, sic_eo, sic_list_all, sic_list_unpaired, sic_mauri_spz, &
         sic_mauri_us, sic_none, slater, use_mom_ref_coac, use_mom_ref_com, use_mom_ref_user, &
@@ -1968,6 +1968,11 @@ CONTAINS
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
+      NULLIFY (subsection)
+      CALL create_sbe_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
    END SUBROUTINE create_rtp_section
 ! **************************************************************************************************
 !> \brief Creates the subsection for specialized options of RTBSE code
@@ -2138,6 +2143,40 @@ CONTAINS
       CALL section_add_subsection(ft_section, subsection)
       CALL section_release(subsection)
    END SUBROUTINE create_ft_section
+! **************************************************************************************************
+!> \brief Creates the subsection for specialized options of Semiconductor Bloch Equations code
+!> \param section The created SBE section
+!> \author Stepan Marek
+!> \date 10.2025
+! **************************************************************************************************
+   SUBROUTINE create_sbe_section(section)
+      TYPE(section_type), POINTER                        :: section
+
+      TYPE(keyword_type), POINTER                        :: keyword
+      ! TYPE(section_type), POINTER                        :: subsection
+
+      NULLIFY (keyword)
+      ! NULLIFY (subsection)
+      CPASSERT(.NOT. ASSOCIATED(section))
+
+      CALL section_create(section, __LOCATION__, &
+              name="SBE", &
+              description="Define the specialized parameters for the semiconductor Bloch equations code", &
+              repeats=.FALSE.)
+
+      ! Marek : Handing over control to the sbe module
+      CALL keyword_create(keyword, __LOCATION__, name="_SECTION_PARAMETERS_", &
+              description="When set to SBE, uses semiconductor Bloch equations to propagate electron density "// &
+              "only in time, without interacting terms. Requires a previous run of low-scaling $GW$ code.", &
+              default_i_val=rtp_method_tddft, &
+              lone_keyword_i_val=rtp_method_sbe, &
+              enum_i_vals=(/rtp_method_tddft, rtp_method_sbe/),&
+              enum_c_vals=s2a("TDDFT", "SBE"), &
+              enum_desc=s2a("Run propagation with TDDFT.", "Run propagation with SBE."))
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+   END SUBROUTINE create_sbe_section
 
 ! **************************************************************************************************
 !> \brief      Create CP2K input section for the SCCS model
