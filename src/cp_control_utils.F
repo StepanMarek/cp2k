@@ -57,7 +57,7 @@ MODULE cp_control_utils
         sccs_derivative_cd3, sccs_derivative_cd5, sccs_derivative_cd7, sccs_derivative_fft, &
         sccs_fattebert_gygi, sic_ad, sic_eo, sic_list_all, sic_list_unpaired, sic_mauri_spz, &
         sic_mauri_us, sic_none, slater, tddfpt_dipole_length, tddfpt_kernel_stda, &
-        use_mom_ref_user, xtb_vdw_type_d3, xtb_vdw_type_d4, xtb_vdw_type_none
+        use_mom_ref_user, xtb_vdw_type_d3, xtb_vdw_type_d4, xtb_vdw_type_none, rtp_method_sbe, rtp_method_bse
    USE input_cp2k_check,                ONLY: xc_functionals_expand
    USE input_cp2k_dft,                  ONLY: create_dft_section
    USE input_enumeration_types,         ONLY: enum_i2c,&
@@ -2780,6 +2780,7 @@ CONTAINS
       INTEGER, DIMENSION(:), POINTER                     :: tmp
       LOGICAL                                            :: is_present
       TYPE(section_vals_type), POINTER                   :: proj_mo_section
+      INTEGER                                            :: method_type
 
       ALLOCATE (dft_control%rtp_control)
       CALL section_vals_val_get(rtp_section, "MAX_ITER", &
@@ -2790,8 +2791,18 @@ CONTAINS
                                 i_val=dft_control%rtp_control%aspc_order)
       CALL section_vals_val_get(rtp_section, "EXP_ACCURACY", &
                                 r_val=dft_control%rtp_control%eps_exp)
+      ! Marek : In case RTBSE and SBE sections are present, warn the user
+      ! Marek : TODO : Decide on periodic vs non-periodic behaviour - should abort if not-compatible?
       CALL section_vals_val_get(rtp_section, "RTBSE%_SECTION_PARAMETERS_", &
                                 i_val=dft_control%rtp_control%rtp_method)
+      CALL section_vals_val_get(rtp_section, "SBE%_SECTION_PARAMETERS_", &
+                                i_val=method_type)
+      IF (method_type == rtp_method_sbe .AND. &
+              dft_control%rtp_control%rtp_method == rtp_method_bse) THEN
+         CPABORT("Cannot use SBE and RTBSE at the same time!")
+      ELSE IF (method_type == rtp_method_sbe) THEN
+         dft_control%rtp_control%rtp_method = rtp_method_sbe
+      END IF
       CALL section_vals_val_get(rtp_section, "RTBSE%RTBSE_HAMILTONIAN", &
                                 i_val=dft_control%rtp_control%rtbse_ham)
       CALL section_vals_val_get(rtp_section, "PROPAGATOR", &
