@@ -1025,7 +1025,8 @@ MODULE input_constants
 
    INTEGER, PARAMETER, PUBLIC               :: rtp_method_tddft = 1, &
                                                rtp_method_bse = 2, &
-                                               rtp_method_bse_linearized = 3
+                                               rtp_method_bse_linearized = 3, &
+                                               rtp_method_sbe = 4
 
    INTEGER, PARAMETER, PUBLIC               :: rtp_bse_ham_ks = 1, &
                                                rtp_bse_ham_gw = 2
