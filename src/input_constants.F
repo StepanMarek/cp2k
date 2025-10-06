@@ -945,7 +945,8 @@ MODULE input_constants
                                                custom_env = 4
 
    INTEGER, PARAMETER, PUBLIC               :: rtp_method_tddft = 1, &
-                                               rtp_method_bse = 2
+                                               rtp_method_bse = 2, &
+                                               rtp_method_sbe = 3
 
    INTEGER, PARAMETER, PUBLIC               :: rtp_bse_ham_ks = 1, &
                                                rtp_bse_ham_g0w0 = 2
