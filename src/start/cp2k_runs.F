@@ -78,7 +78,7 @@ MODULE cp2k_runs
         do_sirius, do_swarm, do_tamc, do_test, do_tree_mc, do_tree_mc_ana, driver_run, ehrenfest, &
         energy_force_run, energy_run, geo_opt_run, linear_response_run, mimic_run, mol_dyn_run, &
         mon_car_run, mtlr_run, negf_run, none_run, pint_run, real_time_propagation, &
-        rtp_method_bse, rtp_method_bse_linearized, tree_mc_run, vib_anal
+        rtp_method_bse, rtp_method_bse_linearized, rtp_method_sbe, tree_mc_run, vib_anal
    USE input_cp2k,                      ONLY: create_cp2k_root_section
    USE input_cp2k_check,                ONLY: check_cp2k_input
    USE input_cp2k_global,               ONLY: create_global_section
@@ -125,6 +125,7 @@ MODULE cp2k_runs
    USE reference_manager,               ONLY: export_references_as_xml
    USE rt_bse,                          ONLY: run_propagation_bse
    USE rt_bse_linearized,               ONLY: run_propagation_linearized_bse
+   USE sbe,                             ONLY: run_propagation_sbe
    USE rt_propagation,                  ONLY: rt_prop_setup
    USE swarm,                           ONLY: run_swarm
    USE tamc_run,                        ONLY: qs_tamc
@@ -363,6 +364,9 @@ CONTAINS
          CASE (rtp_method_bse)
             ! Run the TD-BSE method
             CALL run_propagation_bse(force_env)
+         CASE (rtp_method_sbe)
+            ! Run the SBE method
+            CALL run_propagation_sbe()
          CASE default
             ! Run the TDDFT method
             CALL rt_prop_setup(force_env)
