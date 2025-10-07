@@ -770,6 +770,7 @@ list(
   rt_propagation_velocity_gauge.F
   sap_kind_types.F
   sbe.F
+  sbe_utils.F
   scf_control_types.F
   scine_utils.F
   se_core_core.F
