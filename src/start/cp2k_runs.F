@@ -354,7 +354,7 @@ CONTAINS
             CALL run_propagation_bse(force_env%qs_env, force_env)
          CASE (rtp_method_sbe)
             ! Run the SBE method
-            CALL run_propagation_sbe()
+            CALL run_propagation_sbe(force_env)
          CASE default
             ! Run the TDDFT method
             CALL rt_prop_setup(force_env)
