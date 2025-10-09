@@ -16,13 +16,22 @@ MODULE sbe
    USE force_env_methods,               ONLY: force_env_calc_energy_force
    USE qs_environment_types,            ONLY: qs_environment_type, &
                                               get_qs_env
+   USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
    USE kpoint_types,                    ONLY: kpoint_type, &
                                               get_kpoint_info
+   USE kpoint_methods,                  ONLY: rskp_transform
    USE kinds,                           ONLY: dp
    USE cp_log_handling,                 ONLY: cp_logger_get_default_io_unit
    USE message_passing,                 ONLY: mp_para_env_type
-   USE sbe_utils,                       ONLY: print_sbe_header_info
-   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
+   USE sbe_utils,                       ONLY: print_sbe_header_info, &
+                                              distribute_rs_matrices
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type, &
+                                              dbcsr_type, &
+                                              dbcsr_create, &
+                                              dbcsr_release, &
+                                              dbcsr_get_info
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_print
+   USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cell_types,                      ONLY: cell_type
 
 #include "./base/base_uses.f90"
@@ -48,17 +57,32 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                       :: routineN="run_propagation_sbe"
       INTEGER                                           :: nkp, &
                                                            i, &
-                                                           unit_nr
+                                                           j, &
+                                                           unit_nr, &
+                                                           n_spin, &
+                                                           n_images, &
+                                                           mat_rows, &
+                                                           mat_cols
+      INTEGER, DIMENSION(2)                             :: dbcsr_shape
       REAL(kind=dp), DIMENSION(:, :), POINTER           :: xkp
-      TYPE(mp_para_env_type), POINTER                   :: para_env
+      REAL(kind=dp), DIMENSION(3)                       :: single_k
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER      :: matrix_s_kp, matrix_h_kp
       TYPE(cell_type), POINTER                          :: cell
+      INTEGER, DIMENSION(:, :, :), POINTER              :: cell_to_index
+      INTEGER, DIMENSION(:, :), POINTER                 :: index_to_cell
+      TYPE(dbcsr_type)                                  :: s_k
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+              POINTER                                   :: sab_nl
+      INTEGER, DIMENSION(3)                             :: cells
+      REAL(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE, &
+              TARGET                                    :: array
+      REAL(kind=dp), DIMENSION(:,:,:,:), POINTER        :: array_p
+      TYPE(mp_para_env_type), POINTER                   :: para_env
 
       unit_nr = cp_logger_get_default_io_unit()
       IF (unit_nr > 0) CALL print_sbe_header_info(unit_nr)
 
       CALL force_env_get(force_env, qs_env=qs_env)
-      ! CALL get_qs_env(qs_env, kpoints=kpoints, para_env=para_env)
       ! CALL get_kpoint_info(kpoints, nkp=nkp, xkp=xkp)
       ! IF (unit_nr > 0) PRINT *, SHAPE(xkp)
       ! DO i=1,nkp
@@ -71,9 +95,39 @@ CONTAINS
       IF (unit_nr > 0) WRITE(unit_nr, "(A34)") " SBE| Initial DFT calculation done"
 
       ! Investigate h and S matrices
-      CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, matrix_ks_kp=matrix_h_kp, cell=cell)
+      CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, matrix_ks_kp=matrix_h_kp, cell=cell, kpoints=kpoints)
       IF (unit_nr > 0) PRINT *, "SBE| ", "S matrix kp shape ", SHAPE(matrix_s_kp)
       IF (unit_nr > 0) PRINT *, "SBE| ", "h matrix kp shape ", SHAPE(matrix_h_kp)
-      IF (unit_nr > 0) PRINT *, "SBE| ", "cell perd ", cell%perd(1), cell%perd(2), cell%perd(3)
+      ! NOTE : cell_to_index has curious index structure - includes negative indices
+      !  - think about how to print it/iterate over it?
+      ! Try to transform by both methods and print some indices
+      ! === Transformation by the original method
+      CALL get_kpoint_info(kpoints, index_to_cell=index_to_cell, cell_to_index=cell_to_index, xkp=xkp, &
+              sab_nl=sab_nl)
+      CALL dbcsr_create(s_k, name="S(k)", template=matrix_s_kp(1, 1)%matrix)
+      CALL cp_dbcsr_alloc_block_from_nbl(s_k, sab_nl)
+      single_k(:) = xkp(:,1)
+      CALL rskp_transform(rmatrix=s_k, rsmat=matrix_s_kp, ispin=1, xkp=single_k, &
+              cell_to_index=cell_to_index, sab_nl=sab_nl)
+      ! CALL dbcsr_print(s_k)
+      CALL dbcsr_release(s_k)
+      ! === Transformation by the duplicated method
+      dbcsr_shape = SHAPE(matrix_s_kp)
+      n_spin = dbcsr_shape(1)
+      n_images = dbcsr_shape(2)
+      CALL dbcsr_get_info(matrix_s_kp(1,1)%matrix, nfullrows_total=mat_rows, nfullcols_total=mat_cols)
+      ! TODO : Report and check per-rank memory requirements
+      ALLOCATE (array(n_spin, n_images, mat_rows, mat_cols), source=0.0_dp)
+      array_p => array
+      CALL distribute_rs_matrices(matrix_s_kp, array_p, index_to_cell, cell_to_index)
+      IF (unit_nr > 0) THEN
+         PRINT *, "== Array on the io process"
+         DO i=1,mat_rows
+            DO j=1,mat_cols
+               PRINT *, i, j, array(1, 62, i, j)
+            END DO
+         END DO
+      END IF
+      DEALLOCATE(array)
    END SUBROUTINE run_propagation_sbe
 END MODULE sbe
