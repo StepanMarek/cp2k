@@ -15,9 +15,15 @@ MODULE sbe_utils
                                               dbcsr_type, &
                                               dbcsr_desymmetrize, &
                                               dbcsr_get_block_p, &
-                                              dbcsr_release
+                                              dbcsr_release, &
+                                              dbcsr_iterator_type, &
+                                              dbcsr_iterator_start, &
+                                              dbcsr_iterator_stop, &
+                                              dbcsr_iterator_blocks_left, &
+                                              dbcsr_iterator_next_block
    USE kinds,                           ONLY: dp
    USE message_passing,                 ONLY: mp_comm_type
+   USE kpoint_types,                    ONLY: kpoint_type
 
 #include "./base/base_uses.f90"
 
@@ -76,7 +82,9 @@ CONTAINS
                                                            n_images, &
                                                            n_spin, &
                                                            my_prow, &
-                                                           my_pcol
+                                                           my_pcol, &
+                                                           row_offset, &
+                                                           col_offset
       INTEGER, DIMENSION(:), POINTER                    :: block_row_offset, &
                                                            block_col_offset, &
                                                            proc_row_dist, &
@@ -85,54 +93,43 @@ CONTAINS
       REAL(kind=dp), DIMENSION(:, :), POINTER           :: block
       LOGICAL                                           :: found, owned
       TYPE(mp_comm_type)                                :: group
+      TYPE(dbcsr_iterator_type)                         :: iterator
 
       ! TODO : Sanity checks - at least 1 image exists, created array has the correct dimensions
       ! Get the global number of rows and columns
       dbcsr_shape = SHAPE(rs_dbcsr)
       n_spin = dbcsr_shape(1)
       n_images = dbcsr_shape(2)
+      CALL dbcsr_get_info(rs_dbcsr(1,1)%matrix, &
+              my_prow=my_prow, my_pcol=my_pcol, group=group)
       ! Iterate over the blocks - get the block coordinates and save to a relevant section locally
-      ! TODO : Rewrite with block iterator, so that block bounds does not need to be explicit
       DO i=1,n_images
-         ! TODO : Separate constants and potentially changing variables
-         CALL dbcsr_get_info(rs_dbcsr(1,i)%matrix, &
-                 nblkrows_total=block_rows, nblkcols_total=block_cols, &
-                 row_blk_offset=block_row_offset, col_blk_offset=block_col_offset, &
-                 my_prow=my_prow, my_pcol=my_pcol, group=group, &
-                 proc_row_dist=proc_row_dist, proc_col_dist=proc_col_dist)
-         DO i_b=1,2
-            DO j_b=i_b,2
-               CALL dbcsr_get_block_p(rs_dbcsr(1,i)%matrix, i_b, j_b, block, found, local_rows, local_cols)
-               IF (found) THEN
-                  ! Write the block
-                  ! TODO : BLAS/OMP
-                  i_g = block_row_offset(i_b)
-                  j_g = block_col_offset(j_b)
-                  array(1,i,i_g:i_g+local_rows-1,j_g:j_g+local_cols-1) = block(1:local_rows,1:local_cols)
-                  ! PRINT *, "Coord range global ", i_g, i_g+local_rows-1, j_g, j_g+local_cols-1, &
-                  !         " local ", 1, local_rows, 1, local_cols
+         CALL dbcsr_iterator_start(iterator, rs_dbcsr(1,i)%matrix)
+         DO WHILE(dbcsr_iterator_blocks_left(iterator))
+            ! Get the block
+            CALL dbcsr_iterator_next_block(iterator, row=i_b, column=j_b, block=block, &
+                    row_size=local_rows, col_size=local_cols, &
+                    row_offset=row_offset, col_offset=col_offset)
+            ! Copy the block to local storage
+            DO k=1, local_rows
+               DO l=1, local_cols
+                  i_g = k + row_offset - 1
+                  j_g = l + col_offset - 1
+                  ! TODO : OMP, Spin
+                  array(1, i, i_g, j_g) = block(k, l)
                   IF (i_b /= j_b) THEN
-                     ! Export the block also to -R
-                     ! Write the block
-                     ! TODO : BLAS/OMP
-                     DO k=1,local_rows
-                        DO l=1,local_rows
-                           array(1, &
-                                   cell_to_index(-index_to_cell(1,i), -index_to_cell(2,i), -index_to_cell(3,i)), &
-                                   j_g+l-1,i_g+k-1) = block(k,l)
-                           ! PRINT *, "== Export global ", j_g+l-1, i_g+k-1, " local ", k, l
-                        END DO
-                     END DO
+                     ! TODO : Check for mirror image existence
+                     array(1, &
+                             cell_to_index(-index_to_cell(1,i), -index_to_cell(2,i), -index_to_cell(3,i)), &
+                             j_g, i_g) = block(k,l)
                   END IF
-               ELSE
-                  ! Set the block to zero
-                  ! TODO: BLAS/OMP
-                  array(1,i,block_row_offset(i_b):block_row_offset(i_b)+local_rows-1, &
-                          block_col_offset(j_b):block_col_offset(j_b)+local_cols-1) = 0.0_dp
-               END IF
+               END DO
             END DO
          END DO
-         CALL group%sum(array(1,i,:,:))
+         CALL dbcsr_iterator_stop(iterator)
       END DO
+      ! Sum only after the entire R-space has been covered on individual ranks
+      ! TODO : Spin
+      CALL group%sum(array(1,:,:,:))
    END SUBROUTINE distribute_rs_matrices
 END MODULE sbe_utils
