@@ -38,6 +38,8 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 10.2025
 ! **************************************************************************************************
+!   SUBROUTINE rs_to_ks(k_array_real, k_array_imag, kpoint, rs_array, index_to_cell)
+!      REAL(kind=dp), DIMENSION(3)                      :: kpoint
    SUBROUTINE integrate_rs_matrices(k_array_real, k_array_imag, kpoint_index, rs_array, kpoints, index_to_cell)
       REAL(kind=dp), DIMENSION(:,:), POINTER            :: k_array_real
       REAL(kind=dp), DIMENSION(:,:), POINTER            :: k_array_imag
