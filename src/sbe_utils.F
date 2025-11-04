@@ -33,8 +33,7 @@ MODULE sbe_utils
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'sbe_utils'
 
-   PUBLIC :: print_sbe_header_info, &
-           distribute_rs_matrices
+   PUBLIC :: print_sbe_header_info
 
 CONTAINS
 ! **************************************************************************************************

@@ -33,8 +33,8 @@ MODULE sbe
    USE cp_dbcsr_contrib,                ONLY: dbcsr_print
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cell_types,                      ONLY: cell_type
-   USE kpoint_k_R_trafo_simple,         ONLY: replicate_rs_matrices
-   USE sbe_methods,                     ONLY: integrate_rs_matrices
+   USE kpoint_k_R_trafo_simple,         ONLY: replicate_rs_matrices, &
+                                              rs_to_kp
 
 #include "./base/base_uses.f90"
 
@@ -167,7 +167,8 @@ CONTAINS
       k_array_real_p => k_array_real
       k_array_imag_p => k_array_imag
       array_s_p => array(1,:,:,:)
-      CALL integrate_rs_matrices(k_array_real_p, k_array_imag_p, 1, array_s_p, kpoints, index_to_cell)
+      ! CALL integrate_rs_matrices(k_array_real_p, k_array_imag_p, 1, array_s_p, kpoints, index_to_cell)
+      CALL rs_to_kp(k_array_real_p, k_array_imag_p, single_k, array_s_p, index_to_cell)
       IF (unit_nr > 0) THEN
          PRINT *, "=== Imag part"
          DO j=1,mat_cols

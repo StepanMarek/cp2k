@@ -15,6 +15,7 @@
 ! **************************************************************************************************
 MODULE kpoint_k_R_trafo_simple
    USE kinds,                             ONLY: dp
+   USE mathconstants,                     ONLY: twopi
    USE cp_dbcsr_api,                      ONLY: dbcsr_p_type, &
                                                 dbcsr_type, &
                                                 dbcsr_iterator_type, &
@@ -111,10 +112,11 @@ CONTAINS
 !> \param array Multidimensional array - matrices are duplicated on each MPI rank
 !> \param index_to_cell Gets the image cell coordinates from the rs_dbcsr index
 !> \param cell_to_index Gets the rs_dbcsr index from image cell coordinates
+!> \param deriv_direction Derivative direction - vector to take scalar product with the gradient
 !> \author Stepan Marek
 !> \date 11.2025
 ! **************************************************************************************************
-   SUBROUTINE rs_to_kp(ks_real, ks_imag, kpoint, rs_real, index_to_cell)
+   SUBROUTINE rs_to_kp(ks_real, ks_imag, kpoint, rs_real, index_to_cell, deriv_direction)
       ! Index 1 : rows, Index 2 : columns of the matrix (AO or MO indices)
       REAL(kind=dp), DIMENSION(:,:), POINTER, &
          INTENT(OUT)                                     :: ks_real, &
@@ -125,6 +127,51 @@ CONTAINS
          INTENT(IN)                                      :: rs_real
       ! Index 1 : direction, index 2 : image cell index
       INTEGER, DIMENSION(:,:), POINTER                   :: index_to_cell
+      REAL(kind=dp), DIMENSION(3), INTENT(IN), OPTIONAL  :: deriv_direction
       CHARACTER(len=*), PARAMETER                        :: routineN="rs_to_kp"
+      INTEGER                                            :: handle, &
+                                                            row_size, &
+                                                            col_size, &
+                                                            n_images, &
+                                                            i, j, k
+      REAL(kind=dp)                                      :: cosfactor, &
+                                                            sinfactor
+      LOGICAL, DIMENSION(3)                              :: derivs_required
+
+      CALL timeset(routineN, handle)
+      ! Get matrix constants
+      row_size = SIZE(ks_real, 1)
+      col_size = SIZE(ks_real, 2)
+      n_images = SIZE(rs_real, 1)
+      ! Get the required derivatives for the deriv direction
+      IF (PRESENT(deriv_direction)) THEN
+         DO k=1,3
+            derivs_required(k) = (deriv_direction(k) /= 0.0_dp)
+         END DO
+      ELSE
+         derivs_required(:) = .FALSE.
+      END IF
+      ! TODO : Implement derivatives
+      IF (ANY(derivs_required)) THEN
+         CPABORT("rs_to_kp kpoint derivatives not yet implemented")
+      END IF
+      ! Now, iterate over realspace and build the sum
+      ! TODO : OMP
+      ks_real(:,:) = 0.0_dp
+      ks_imag(:,:) = 0.0_dp
+      DO i=1,n_images
+         ! Construct the phase and factors
+         cosfactor = COS(twopi*(kpoint(1) * index_to_cell(1,i) + &
+                 kpoint(2) * index_to_cell(2,i) + kpoint(3) * index_to_cell(3,i)))
+         sinfactor = SIN(twopi*(kpoint(1) * index_to_cell(1,i) + &
+                 kpoint(2) * index_to_cell(2,i) + kpoint(3) * index_to_cell(3,i)))
+         DO j=1,row_size
+            DO k=1,col_size
+               ks_real(j,k) = ks_real(j,k) + cosfactor * rs_real(i, j, k)
+               ks_imag(j,k) = ks_imag(j,k) + sinfactor * rs_real(i, j, k)
+            END DO
+         END DO
+      END DO
+      CALL timestop(handle)
    END SUBROUTINE rs_to_kp
 END MODULE kpoint_k_R_trafo_simple
