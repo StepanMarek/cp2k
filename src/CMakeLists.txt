@@ -323,6 +323,7 @@ list(
   kpoint_methods.F
   kpoint_transitional.F
   kpoint_types.F
+  kpoint_k_R_trafo_simple.F
   kpsym.F
   libgrpp_integrals.F
   libint_2c_3c.F

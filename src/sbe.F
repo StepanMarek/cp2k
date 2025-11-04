@@ -23,8 +23,7 @@ MODULE sbe
    USE kinds,                           ONLY: dp
    USE cp_log_handling,                 ONLY: cp_logger_get_default_io_unit
    USE message_passing,                 ONLY: mp_para_env_type
-   USE sbe_utils,                       ONLY: print_sbe_header_info, &
-                                              distribute_rs_matrices
+   USE sbe_utils,                       ONLY: print_sbe_header_info
    USE cp_dbcsr_api,                    ONLY: dbcsr_p_type, &
                                               dbcsr_type, &
                                               dbcsr_create, &
@@ -34,6 +33,7 @@ MODULE sbe
    USE cp_dbcsr_contrib,                ONLY: dbcsr_print
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cell_types,                      ONLY: cell_type
+   USE kpoint_k_R_trafo_simple,         ONLY: replicate_rs_matrices
    USE sbe_methods,                     ONLY: integrate_rs_matrices
 
 #include "./base/base_uses.f90"
@@ -134,11 +134,24 @@ CONTAINS
               REAL(n_images, kind=dp) * REAL(mat_rows, kind=dp) * REAL(mat_cols, kind=dp) / &
               (1024.0_dp * 1024.0_dp * 1024.0_dp), "GiB"
       array_p => array
-      CALL distribute_rs_matrices(matrix_s_kp, array_p, index_to_cell, cell_to_index)
+      ! CALL distribute_rs_matrices(matrix_s_kp, array_p, index_to_cell, cell_to_index)
+      CALL replicate_rs_matrices(matrix_s_kp, array_p, index_to_cell, cell_to_index)
+      ! PRINT *, "RS matrix contents"
+      ! PRINT *, index_to_cell(1,2), index_to_cell(2,2), index_to_cell(3,2)
+      ! CALL dbcsr_print(matrix_s_kp(1,2)%matrix)
+      ! PRINT *, index_to_cell(1,3), index_to_cell(2,3), index_to_cell(3,3)
+      ! CALL dbcsr_print(matrix_s_kp(1,3)%matrix)
       ! IF (unit_nr > 0) THEN
       !    DO i=1,mat_rows
       !       DO j=1,mat_cols
       !          PRINT *, i, j, array(1,2,i, j)
+      !       END DO
+      !    END DO
+      ! END IF
+      ! IF (unit_nr > 0) THEN
+      !    DO i=1,mat_rows
+      !       DO j=1,mat_cols
+      !          PRINT *, i, j, array(1,3,i, j)
       !       END DO
       !    END DO
       ! END IF
