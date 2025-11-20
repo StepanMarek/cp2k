@@ -235,7 +235,7 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 11.2025
 ! **************************************************************************************************
-   SUBROUTINE rs_to_kp(ks_real, ks_imag, xkp, rs_real, index_to_cell, deriv_direction)
+   SUBROUTINE rs_to_kp(ks_real, ks_imag, xkp, rs_real, index_to_cell, deriv_direction, hmat)
       ! Index 1 : rows, Index 2 : columns of the matrix (AO or MO indices)
       REAL(kind=dp), DIMENSION(:,:), INTENT(OUT)         :: ks_real, &
                                                             ks_imag
@@ -244,7 +244,10 @@ CONTAINS
       REAL(kind=dp), DIMENSION(:,:,:), INTENT(IN)        :: rs_real
       ! Index 1 : direction, index 2 : image cell index
       INTEGER, DIMENSION(:,:), POINTER                   :: index_to_cell
-      REAL(kind=dp), DIMENSION(3), INTENT(IN), OPTIONAL  :: deriv_direction
+      INTEGER, INTENT(IN), OPTIONAL                      :: deriv_direction
+      REAL(kind=dp), DIMENSION(3)                        :: cell_vectors
+      REAL(kind=dp)                                      :: deriv_factor
+      REAL(kind=dp), DIMENSION(3,3), INTENT(IN), OPTIONAL:: hmat
       CHARACTER(len=*), PARAMETER                        :: routineN="rs_to_kp"
       INTEGER                                            :: handle, &
                                                             row_size, &
@@ -253,7 +256,7 @@ CONTAINS
                                                             i, j, k
       REAL(kind=dp)                                      :: cosfactor, &
                                                             sinfactor
-      LOGICAL, DIMENSION(3)                              :: derivs_required
+      LOGICAL                                            :: derivs_required
 
       CALL timeset(routineN, handle)
       ! Get matrix constants
@@ -261,16 +264,12 @@ CONTAINS
       col_size = SIZE(ks_real, 2)
       n_images = SIZE(rs_real, 1)
       ! Get the required derivatives for the deriv direction
+      derivs_required = .FALSE.
       IF (PRESENT(deriv_direction)) THEN
-         DO k=1,3
-            derivs_required(k) = (deriv_direction(k) /= 0.0_dp)
-         END DO
-      ELSE
-         derivs_required(:) = .FALSE.
-      END IF
-      ! TODO : Implement derivatives
-      IF (ANY(derivs_required)) THEN
-         CPABORT("rs_to_kp kpoint derivatives not yet implemented")
+         derivs_required = (deriv_direction /= 0)
+         IF (.NOT. PRESENT(hmat)) THEN
+            CALL cp_abort(__LOCATION__, "derivative requested but h matrix not provided")
+         END IF
       END IF
       ! Now, iterate over realspace and build the sum
       ! TODO : OMP
@@ -278,14 +277,17 @@ CONTAINS
       ks_imag(:,:) = 0.0_dp
       DO i=1,n_images
          ! Construct the phase and factors
-         cosfactor = COS(twopi*(xkp(1) * index_to_cell(1,i) + &
-                 xkp(2) * index_to_cell(2,i) + xkp(3) * index_to_cell(3,i)))
-         sinfactor = SIN(twopi*(xkp(1) * index_to_cell(1,i) + &
-                 xkp(2) * index_to_cell(2,i) + xkp(3) * index_to_cell(3,i)))
+         deriv_factor = 1.0_dp
+         IF (derivs_required) THEN
+            cell_vectors = MATMUL(hmat, REAL(index_to_cell(1:3, i), dp))
+            deriv_factor = cell_vectors(deriv_direction)
+         END IF
+         cosfactor = COS(twopi * SUM(xkp * index_to_cell(:,i)))
+         sinfactor = SIN(twopi * SUM(xkp * index_to_cell(:,i)))
          DO j=1,row_size
             DO k=1,col_size
-               ks_real(j,k) = ks_real(j,k) + cosfactor * rs_real(i, j, k)
-               ks_imag(j,k) = ks_imag(j,k) + sinfactor * rs_real(i, j, k)
+               ks_real(j,k) = ks_real(j,k) + deriv_factor * cosfactor * rs_real(i, j, k)
+               ks_imag(j,k) = ks_imag(j,k) + deriv_factor * sinfactor * rs_real(i, j, k)
             END DO
          END DO
       END DO
