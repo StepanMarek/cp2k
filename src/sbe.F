@@ -99,6 +99,7 @@ CONTAINS
 
       ! Create full kpoints environment
       ! TODO : Also populate with user defined grid, without symmetry (due to breaking by nonlinearity)
+      ! TODO : Move initialisations into SBE env
       NULLIFY (kpoints_all)
       CALL kpoint_create(kpoints_all)
       CALL get_qs_env(qs_env, dft_control=dft_control, para_env=para_env, sab_all=sab_all)

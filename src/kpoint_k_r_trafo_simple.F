@@ -19,7 +19,8 @@ MODULE kpoint_k_r_trafo_simple
    USE cp_dbcsr_api,                      ONLY: dbcsr_p_type, &
                                                 dbcsr_type, &
                                                 dbcsr_get_info, &
-                                                dbcsr_get_block_p
+                                                dbcsr_get_readonly_block_p, &
+                                                dbcsr_type_no_symmetry
    USE message_passing,                   ONLY: mp_comm_type
    USE qs_neighbor_list_types,            ONLY: neighbor_list_set_p_type, &
                                                 neighbor_list_iterator_p_type, &
@@ -42,126 +43,187 @@ MODULE kpoint_k_r_trafo_simple
 CONTAINS
 ! **************************************************************************************************
 !> \brief Convert dbcsr matrices representing operators in real-space image cells to arrays
-!> \param rs_dbcsr_src Array of dbcsr matrices
-!> \param kpoint_src The kpoint environment of the source matrix (providing neighbor list and cell_to_index)
-!> \param rs_array_dst Multidimensional array - matrices are duplicated on each MPI rank
-!> \param cell_to_index_dst Cell to index array for the destination array
+!> \param rs_dbcsr_in Array of dbcsr matrices
+!> \param kpoint_in The kpoint environment of the source matrix (providing neighbor list and cell_to_index)
+!> \param rs_array_out Multidimensional array - matrices are duplicated on each MPI rank
+!> \param cell_to_index_out Cell to index array for the destination array
 !> \author Stepan Marek
 !> \date 11.2025
 ! **************************************************************************************************
-   SUBROUTINE replicate_rs_matrices(rs_dbcsr_src, kpoint_src, rs_array_dst, cell_to_index_dst)
+   SUBROUTINE replicate_rs_matrices(rs_dbcsr_in, kpoint_in, rs_array_out, cell_to_index_out)
       ! dimension 1 : spin, dimension 2 : image cell index
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rs_dbcsr_src
-      TYPE(kpoint_type), POINTER                         :: kpoint_src
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rs_dbcsr_in
+      TYPE(kpoint_type), POINTER                         :: kpoint_in
       ! dimension 1 : spin/derivs, dimension 2 : image cell index, dimension 3 : rows, dimension 4 : cols
-      REAL(kind=dp), DIMENSION(:,:,:,:)                  :: rs_array_dst
-      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index_dst
+      REAL(kind=dp), DIMENSION(:,:,:,:)                  :: rs_array_out
+      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index_out
       CHARACTER(len=*), PARAMETER                        :: routineN = "replicate_rs_matrices"
       INTEGER                                            :: n_spin, ispin, &
                                                             handle, &
-                                                            i, j, &
-                                                            row_offset, col_offset, &
+                                                            !i, j, &
+                                                            !row_offset, col_offset, &
                                                             iatom, jatom, &
-                                                            dst_index, src_index, &
-                                                            col_size, row_size
-      INTEGER, DIMENSION(:), POINTER                     :: row_offsets, col_offsets
+                                                            src_index!src_index, &
+                                                            !col_size, row_size
+      ! INTEGER, DIMENSION(:), POINTER                     :: row_offsets, col_offsets
       TYPE(mp_comm_type)                                 :: group
-      REAL(kind=dp), DIMENSION(:,:), POINTER             :: block
+      ! REAL(kind=dp), DIMENSION(:,:), POINTER             :: block
       INTEGER, DIMENSION(3)                              :: cell
-      LOGICAL                                            :: found
+      ! LOGICAL                                            :: found
       TYPE(neighbor_list_iterator_p_type), &
          DIMENSION(:), POINTER                           :: iterator
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: sab_kp_src
+      CHARACTER                                          :: matrix_sym
 
       CALL timeset(routineN, handle)
 
-      ! Start by constructing the cell_to_index_src
-      sab_kp_src => kpoint_src%sab_nl
-      ! TODO : Sanity checks - array to be filled has the correct dimensions
-      ! NOTE : The first index in matrix_s_kp is not spin index, but number of derivatives.
-      !        But, for matrix_ks_kp, this is indeed the spin index.
-      n_spin = SIZE(rs_dbcsr_src, 1)
-      IF (SIZE(rs_dbcsr_src, 2) < 1) THEN
+      IF (SIZE(rs_dbcsr_in, 2) < 1) THEN
          CALL cp_abort(__LOCATION__, "No source image cells provided!")
       END IF
-      CALL dbcsr_get_info(rs_dbcsr_src(1, 1)%matrix, group=group)
+      ! Start by constructing the cell_to_index_src
+      sab_kp_src => kpoint_in%sab_nl
+      ! NOTE : The first index in matrix_s_kp is not spin index, but number of derivatives.
+      !        But, for matrix_ks_kp, this is indeed the spin index.
+      n_spin = SIZE(rs_dbcsr_in, 1)
+      CALL dbcsr_get_info(rs_dbcsr_in(1, 1)%matrix, group=group, matrix_type=matrix_sym)
       DO ispin=1,n_spin
          CALL neighbor_list_iterator_create(iterator, sab_kp_src)
          DO WHILE (neighbor_list_iterate(iterator) == 0)
             CALL get_iterator_info(iterator, cell=cell, iatom=iatom, jatom=jatom)
-            src_index = kpoint_src%cell_to_index(cell(1), cell(2), cell(3))
+            src_index = kpoint_in%cell_to_index(cell(1), cell(2), cell(3))
             IF (src_index == 0) THEN
                CALL cp_abort(__LOCATION__, "Image not found in the source array.")
             END IF
-            CALL dbcsr_get_info(rs_dbcsr_src(ispin, src_index)%matrix, &
-                                row_blk_offset=row_offsets, col_blk_offset=col_offsets)
-            ! Get the source block
-            IF (iatom > jatom) THEN
-               ! More complicated swaps
-               CALL dbcsr_get_block_p(rs_dbcsr_src(ispin,src_index)%matrix, &
-                                      row=jatom, col=iatom, &
-                                      block=block, found=found, &
-                                      row_size=row_size, col_size=col_size)
-               row_offset = row_offsets(jatom)
-               col_offset = col_offsets(iatom)
-               ! If not found, some other rank will handle this
-               IF (.NOT. found) CYCLE
-               dst_index = cell_to_index_dst(-cell(1), -cell(2), -cell(3))
-               IF (dst_index == 0) THEN
-                  CALL cp_abort(__LOCATION__, "Mirror image not found in destination array.")
-               END IF
-               DO i = 1,row_size
-                  DO j = 1,col_size
-                     rs_array_dst(ispin, dst_index, i+row_offset-1, j+col_offset-1) = block(i, j)
-                  END DO
-               END DO
-               dst_index = cell_to_index_dst(cell(1), cell(2), cell(3))
-               IF (dst_index == 0) THEN
-                  CALL cp_abort(__LOCATION__, "Image not found in destination array.")
-               END IF
-               ! Save the transposed part
-               DO i = 1,row_size
-                  DO j = 1,col_size
-                     rs_array_dst(ispin, dst_index, j+col_offset-1, i+row_offset-1) = block(i, j)
-                  END DO
-               END DO
+            ! NOTE : Expect only specific symmetry storage relevant for kpoint calculations
+            IF (matrix_sym == dbcsr_type_no_symmetry) THEN
+               CALL write_block_no_sym(iatom, jatom, cell, rs_dbcsr_in(ispin, src_index)%matrix, &
+                                       rs_array_out(ispin, :, :, :), cell_to_index_out)
             ELSE
-               ! Standard case, just save the block directly and if off-diagonal, save the transpose to negative
-               CALL dbcsr_get_block_p(rs_dbcsr_src(ispin, src_index)%matrix, &
-                                      row=iatom, col=jatom, block=block, found=found,&
-                                      row_size=row_size, col_size=col_size)
-               row_offset = row_offsets(iatom)
-               col_offset = col_offsets(jatom)
-               IF (.NOT. found) CYCLE
-               dst_index = cell_to_index_dst(cell(1), cell(2), cell(3))
-               IF (dst_index == 0) THEN
-                  CALL cp_abort(__LOCATION__, "Image not found in destination array.")
-               END IF
-               DO i=1, row_size
-                  DO j=1, col_size
-                     rs_array_dst(ispin, dst_index, i+row_offset-1, j+col_offset-1) = block(i, j)
-                  END DO
-               END DO
-               IF ( iatom /= jatom ) THEN
-                  ! Also save the transpose
-                  dst_index = cell_to_index_dst(-cell(1), -cell(2), -cell(3))
-                  IF (dst_index == 0) THEN
-                     CALL cp_abort(__LOCATION__, "Mirror image not found in destination array.")
-                  END IF
-                  DO i=1, row_size
-                     DO j=1, col_size
-                        rs_array_dst(ispin, dst_index, j+col_offset-1, i+row_offset-1) = block(i, j)
-                     END DO
-                  END DO
-               END IF
+               CALL write_block_symmetric(iatom, jatom, cell, rs_dbcsr_in(ispin, src_index)%matrix, &
+                                          rs_array_out(ispin, :, :, :), cell_to_index_out)
             END IF
          END DO
          CALL neighbor_list_iterator_release(iterator)
       END DO
-      CALL group%sum(rs_array_dst(:,:,:,:))
+      CALL group%sum(rs_array_out(:,:,:,:))
       CALL timestop(handle)
    END SUBROUTINE replicate_rs_matrices
+! **************************************************************************************************
+!> \brief Write a single block from the dbcsr matrix to correct place, with assumed symmetric dbcsr
+!> \param iatom first atom index
+!> \param jatom second atom index
+!> \param cell Current cell (of second atom)
+!> \param matrix_in DBCSR matrix input, symmetric assumed (A_(mu nu)^(R) = A_(nu mu)^(-R))
+!> \param array_out Multidimensional array - dim 1 : rs_index, dim 2 : rows, dim 3 : cols
+!> \param cell_to_index_out Mapping of cell coords to rs_indices
+!> \author Stepan Marek
+!> \date 11.2025
+! **************************************************************************************************
+   SUBROUTINE write_block_symmetric(iatom, jatom, cell, matrix_in, array_out, cell_to_index_out)
+      INTEGER, INTENT(IN)                                :: iatom, &
+                                                            jatom
+      INTEGER, DIMENSION(3), INTENT(IN)                  :: cell
+      TYPE(dbcsr_type), INTENT(IN)                       :: matrix_in
+      REAL(kind=dp), DIMENSION(:,:,:), INTENT(INOUT)     :: array_out
+      INTEGER, DIMENSION(:,:,:), POINTER, INTENT(IN)     :: cell_to_index_out
+      REAL(kind=dp), DIMENSION(:,:), POINTER             :: block
+      LOGICAL                                            :: found
+      INTEGER, DIMENSION(:), POINTER                     :: row_offsets, &
+                                                            col_offsets
+      INTEGER                                            :: row_size, &
+                                                            col_size, &
+                                                            dest_index, &
+                                                            dest_index_t, &
+                                                            row_offset, &
+                                                            col_offset, &
+                                                            i, j, i_g, j_g
+
+      CALL dbcsr_get_info(matrix_in, row_blk_offset=row_offsets, col_blk_offset=col_offsets)
+      IF (iatom > jatom) THEN
+         CALL dbcsr_get_readonly_block_p(matrix_in, row=jatom, col=iatom, block=block, &
+                                row_size=row_size, col_size=col_size, found=found)
+         IF (.NOT. found) RETURN
+         ! Block found, prepare for write
+         dest_index = cell_to_index_out(-cell(1), -cell(2), -cell(3))
+         IF (dest_index == 0) CPABORT("Mirror image index not present.")
+         dest_index_t = cell_to_index_out(cell(1), cell(2), cell(3))
+         IF (dest_index_t == 0) CPABORT("Image index not present.")
+         row_offset = row_offsets(jatom)
+         col_offset = col_offsets(iatom)
+      ELSE
+         CALL dbcsr_get_readonly_block_p(matrix_in, row=iatom, col=jatom, block=block, &
+                                row_size=row_size, col_size=col_size, found=found)
+         IF (.NOT. found) RETURN
+         ! Block found, prepare for write
+         dest_index = cell_to_index_out(cell(1), cell(2), cell(3))
+         IF (dest_index == 0) CPABORT("Image index not present.")
+         dest_index_t = cell_to_index_out(-cell(1), -cell(2), -cell(3))
+         IF (dest_index_t == 0) CPABORT("Mirror image index not present.")
+         row_offset = row_offsets(iatom)
+         col_offset = col_offsets(jatom)
+      END IF
+      ! Do the write
+      !$OMP PARALLEL DO DEFAULT(none) PRIVATE(i,j,i_g,j_g) &
+      !$OMP SHARED(row_size, col_size, row_offset, col_offset, array_out, &
+      !$OMP dest_index, dest_index_t, block, iatom, jatom)
+      DO i=1,row_size
+         i_g = i + row_offset - 1
+         DO j=1, col_size
+            j_g = j + col_offset - 1
+            array_out(dest_index, i_g, j_g) = block(i, j)
+            IF (iatom /= jatom) array_out(dest_index_t, j_g, i_g) = block(i, j)
+         END DO
+      END DO
+      !$OMP END PARALLEL DO
+   END SUBROUTINE write_block_symmetric
+! **************************************************************************************************
+!> \brief Write a single block from the dbcsr matrix to correct place, assuming no symmetry dbcsr
+!> \param iatom first atom index
+!> \param jatom second atom index
+!> \param cell Current cell (of second atom)
+!> \param matrix_in DBCSR matrix input, symmetric assumed (A_(mu nu)^(R) = A_(nu mu)^(-R))
+!> \param array_out Multidimensional array - dim 1 : rs_index, dim 2 : rows, dim 3 : cols
+!> \param cell_to_index_out Mapping of cell coords to rs_indices
+!> \author Stepan Marek
+!> \date 11.2025
+! **************************************************************************************************
+   SUBROUTINE write_block_no_sym(iatom, jatom, cell, matrix_in, array_out, cell_to_index_out)
+      INTEGER, INTENT(IN)                                :: iatom, &
+                                                            jatom
+      INTEGER, DIMENSION(3), INTENT(IN)                  :: cell
+      TYPE(dbcsr_type), INTENT(IN)                       :: matrix_in
+      REAL(kind=dp), DIMENSION(:,:,:), INTENT(INOUT)     :: array_out
+      INTEGER, DIMENSION(:,:,:), POINTER, INTENT(IN)     :: cell_to_index_out
+      REAL(kind=dp), DIMENSION(:,:), POINTER             :: block
+      LOGICAL                                            :: found
+      INTEGER, DIMENSION(:), POINTER                     :: row_offsets, &
+                                                            col_offsets
+      INTEGER                                            :: row_size, &
+                                                            col_size, &
+                                                            dest_index, &
+                                                            row_offset, &
+                                                            col_offset, &
+                                                            i, j, i_g, j_g
+
+      dest_index = cell_to_index_out(cell(1), cell(2), cell(3))
+      IF (dest_index == 0) CPABORT("Image index not present.")
+      CALL dbcsr_get_info(matrix_in, row_blk_offset=row_offsets, col_blk_offset=col_offsets)
+      row_offset = row_offsets(iatom)
+      col_offset = col_offsets(jatom)
+      CALL dbcsr_get_readonly_block_p(matrix_in, row=iatom, col=jatom, block=block, found=found, &
+                                      row_size=row_size, col_size=col_size)
+      !$OMP PARALLEL DO DEFAULT(none) PRIVATE(i, j, i_g, j_g) &
+      !$OMP SHARED(row_size, col_size, row_offset, col_offset, dest_index, block, array_out)
+      DO i=1, row_size
+         i_g = i + row_offset - 1
+         DO j=1, col_size
+            j_g = j + col_offset - 1
+            array_out(dest_index, i_g, j_g) = block(i, j)
+         END DO
+      END DO
+      !$OMP END PARALLEL DO
+   END SUBROUTINE write_block_no_sym
 ! **************************************************************************************************
 !> \brief Integrate RS matrices (stored as Fortran array) into a kpoint matrix at given kp
 !> \param ks_real Array of resulting transformed 
@@ -173,11 +235,11 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 11.2025
 ! **************************************************************************************************
-   SUBROUTINE rs_to_kp(ks_real, ks_imag, kpoint, rs_real, index_to_cell, deriv_direction)
+   SUBROUTINE rs_to_kp(ks_real, ks_imag, xkp, rs_real, index_to_cell, deriv_direction)
       ! Index 1 : rows, Index 2 : columns of the matrix (AO or MO indices)
       REAL(kind=dp), DIMENSION(:,:), INTENT(OUT)         :: ks_real, &
                                                             ks_imag
-      REAL(kind=dp), DIMENSION(3), INTENT(IN)            :: kpoint
+      REAL(kind=dp), DIMENSION(3), INTENT(IN)            :: xkp
       ! Index 1 : image cell index, index 2 : rows, index 3 : columns of the matrix
       REAL(kind=dp), DIMENSION(:,:,:), INTENT(IN)        :: rs_real
       ! Index 1 : direction, index 2 : image cell index
@@ -216,10 +278,10 @@ CONTAINS
       ks_imag(:,:) = 0.0_dp
       DO i=1,n_images
          ! Construct the phase and factors
-         cosfactor = COS(twopi*(kpoint(1) * index_to_cell(1,i) + &
-                 kpoint(2) * index_to_cell(2,i) + kpoint(3) * index_to_cell(3,i)))
-         sinfactor = SIN(twopi*(kpoint(1) * index_to_cell(1,i) + &
-                 kpoint(2) * index_to_cell(2,i) + kpoint(3) * index_to_cell(3,i)))
+         cosfactor = COS(twopi*(xkp(1) * index_to_cell(1,i) + &
+                 xkp(2) * index_to_cell(2,i) + xkp(3) * index_to_cell(3,i)))
+         sinfactor = SIN(twopi*(xkp(1) * index_to_cell(1,i) + &
+                 xkp(2) * index_to_cell(2,i) + xkp(3) * index_to_cell(3,i)))
          DO j=1,row_size
             DO k=1,col_size
                ks_real(j,k) = ks_real(j,k) + cosfactor * rs_real(i, j, k)
