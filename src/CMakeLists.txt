@@ -771,6 +771,7 @@ list(
   sap_kind_types.F
   sbe.F
   sbe_methods.F
+  sbe_types.F
   sbe_utils.F
   scf_control_types.F
   scine_utils.F
