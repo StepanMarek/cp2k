@@ -23,8 +23,7 @@ MODULE sbe
    USE kinds,                           ONLY: dp
    USE cp_log_handling,                 ONLY: cp_logger_get_default_io_unit
    USE message_passing,                 ONLY: mp_para_env_type
-   USE sbe_utils,                       ONLY: print_sbe_header_info, &
-                                              distribute_rs_matrices
+   USE sbe_utils,                       ONLY: print_sbe_header_info
    USE cp_dbcsr_api,                    ONLY: dbcsr_p_type, &
                                               dbcsr_type, &
                                               dbcsr_create, &
@@ -34,6 +33,7 @@ MODULE sbe
    USE cp_dbcsr_contrib,                ONLY: dbcsr_print
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cell_types,                      ONLY: cell_type
+   USE kpoint_k_R_trafo_simple,         ONLY: replicate_rs_matrices
    USE sbe_methods,                     ONLY: integrate_rs_matrices
 
 #include "./base/base_uses.f90"
@@ -57,8 +57,7 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                :: qs_env
       TYPE(kpoint_type), POINTER                        :: kpoints
       CHARACTER(len=*), PARAMETER                       :: routineN="run_propagation_sbe"
-      INTEGER                                           :: nkp, &
-                                                           i, &
+      INTEGER                                           :: i, &
                                                            j, &
                                                            unit_nr, &
                                                            n_spin, &
@@ -75,7 +74,6 @@ CONTAINS
       TYPE(dbcsr_type)                                  :: s_k, sc_k
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                   :: sab_nl
-      INTEGER, DIMENSION(3)                             :: cells
       REAL(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE, &
               TARGET                                    :: array
       REAL(kind=dp), DIMENSION(:,:,:,:), POINTER        :: array_p
@@ -84,7 +82,7 @@ CONTAINS
       REAL(kind=dp), DIMENSION(:,:), ALLOCATABLE, TARGET:: k_array_imag
       REAL(kind=dp), DIMENSION(:,:), POINTER            :: k_array_real_p
       REAL(kind=dp), DIMENSION(:,:), POINTER            :: k_array_imag_p
-      TYPE(mp_para_env_type), POINTER                   :: para_env
+      INTEGER                                           :: handle
 
       unit_nr = cp_logger_get_default_io_unit()
       IF (unit_nr > 0) CALL print_sbe_header_info(unit_nr)
@@ -96,6 +94,7 @@ CONTAINS
       CALL force_env_calc_energy_force(force_env, calc_force=.FALSE., consistent_energies=.FALSE.)
       IF (unit_nr > 0) WRITE(unit_nr, "(A34)") " SBE| Initial DFT calculation done"
 
+      CALL timeset(routineN, handle)
 
       ! Investigate h and S matrices
       CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, matrix_ks_kp=matrix_h_kp, cell=cell, kpoints=kpoints)
@@ -134,11 +133,24 @@ CONTAINS
               REAL(n_images, kind=dp) * REAL(mat_rows, kind=dp) * REAL(mat_cols, kind=dp) / &
               (1024.0_dp * 1024.0_dp * 1024.0_dp), "GiB"
       array_p => array
-      CALL distribute_rs_matrices(matrix_s_kp, array_p, index_to_cell, cell_to_index)
+      ! CALL distribute_rs_matrices(matrix_s_kp, array_p, index_to_cell, cell_to_index)
+      CALL replicate_rs_matrices(matrix_s_kp, kpoints, array_p, cell_to_index)
+      ! PRINT *, "RS matrix contents"
+      ! PRINT *, index_to_cell(1,2), index_to_cell(2,2), index_to_cell(3,2)
+      ! CALL dbcsr_print(matrix_s_kp(1,2)%matrix)
+      ! PRINT *, index_to_cell(1,3), index_to_cell(2,3), index_to_cell(3,3)
+      ! CALL dbcsr_print(matrix_s_kp(1,3)%matrix)
       ! IF (unit_nr > 0) THEN
       !    DO i=1,mat_rows
       !       DO j=1,mat_cols
       !          PRINT *, i, j, array(1,2,i, j)
+      !       END DO
+      !    END DO
+      ! END IF
+      ! IF (unit_nr > 0) THEN
+      !    DO i=1,mat_rows
+      !       DO j=1,mat_cols
+      !          PRINT *, i, j, array(1,3,i, j)
       !       END DO
       !    END DO
       ! END IF
@@ -172,5 +184,7 @@ CONTAINS
       DEALLOCATE(array)
       DEALLOCATE(k_array_real)
       DEALLOCATE(k_array_imag)
+
+      CALL timestop(handle)
    END SUBROUTINE run_propagation_sbe
 END MODULE sbe
