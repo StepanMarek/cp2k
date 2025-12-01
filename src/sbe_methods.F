@@ -38,6 +38,8 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 10.2025
 ! **************************************************************************************************
+!   SUBROUTINE rs_to_ks(k_array_real, k_array_imag, kpoint, rs_array, index_to_cell)
+!      REAL(kind=dp), DIMENSION(3)                      :: kpoint
    SUBROUTINE integrate_rs_matrices(k_array_real, k_array_imag, kpoint_index, rs_array, kpoints, index_to_cell)
       REAL(kind=dp), DIMENSION(:,:), POINTER            :: k_array_real
       REAL(kind=dp), DIMENSION(:,:), POINTER            :: k_array_imag
@@ -52,7 +54,6 @@ CONTAINS
                                                            n_images, &
                                                            row_size, &
                                                            col_size
-      INTEGER, DIMENSION(2)                             :: mat_size
       REAL(kind=dp), DIMENSION(3)                       :: kp
       REAL(kind=dp), DIMENSION(:, :), POINTER           :: xkp
       REAL(kind=dp)                                     :: cosfactor, &
@@ -60,9 +61,6 @@ CONTAINS
 
       CALL timeset(routineN, handle)
       ! Get matrix constants
-      ! mat_size = SHAPE(k_array_real)
-      ! row_size = mat_size(1)
-      ! col_size = mat_size(2)
       row_size = SIZE(k_array_real, 1)
       col_size = SIZE(k_array_real, 2)
       n_images = SIZE(rs_array, 1)
