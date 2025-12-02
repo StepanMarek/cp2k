@@ -29,7 +29,7 @@ MODULE sbe_types
    USE input_section_types, ONLY: section_vals_type, &
                                   section_vals_get_subs_vals
    USE post_scf_bandstructure_utils, ONLY: compute_xkp
-   USE cp_log_handling, ONLY: cp_logger_get_default_unit_nr, &
+   USE cp_log_handling, ONLY: cp_logger_get_default_io_unit, &
                               cp_logger_type, &
                               cp_get_default_logger
 #include "./base/base_uses.f90"
@@ -124,7 +124,7 @@ CONTAINS
       ! TODO : Get the kpoint distribution (unless too hard, then just use modulos)
       CALL sbe_create_kpoint_dist(sbe_env%kpoints, efficiency)
       logger => cp_get_default_logger()
-      sbe_env%unit_nr = cp_logger_get_default_unit_nr(logger)
+      sbe_env%unit_nr = cp_logger_get_default_io_unit(logger)
       IF (sbe_env%unit_nr > 0) THEN
          WRITE (sbe_env%unit_nr, "(A36,F42.2,A2)") " SBE| Kpoint work balance efficiency", 100.0_dp * efficiency, " %"
          DO i=1, sbe_env%kpoints%para_env%num_pe
@@ -176,8 +176,8 @@ CONTAINS
       IF (kpoints%nkp < 1) THEN
          ! Edge case - invalid or zero number of kpoints
          ! In that case, set up so that all bounds lead to no iterations
-         kpoints%kp_dist(1,:) = -2
-         kpoints%kp_dist(2,:) = -1
+         kpoints%kp_dist(1,:) = -1
+         kpoints%kp_dist(2,:) = -2
       ELSE
          ! Standard case
          ! Start
@@ -185,8 +185,14 @@ CONTAINS
          kpoints%kp_dist(2,1) = nkp_loc(1)
          ! Other tasks
          DO i=2, num_pe
-            kpoints%kp_dist(1,i) = kpoints%kp_dist(2,i-1) + 1
-            kpoints%kp_dist(2,i) = kpoints%kp_dist(1,i) + nkp_loc(i) - 1
+            IF (nkp_loc(i) > 0) THEN
+               kpoints%kp_dist(1,i) = kpoints%kp_dist(2,i-1) + 1
+               kpoints%kp_dist(2,i) = kpoints%kp_dist(1,i) + nkp_loc(i) - 1
+            ELSE
+               ! No kpoints edge case - no iteration setup
+               kpoints%kp_dist(1,i) = -1
+               kpoints%kp_dist(2,i) = -2
+            END IF
          END DO
       END IF
       ! The distribution is now setup
