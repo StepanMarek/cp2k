@@ -27,6 +27,9 @@ MODULE sbe
    USE cp_log_handling,                ONLY: cp_logger_get_default_io_unit
    USE message_passing,                ONLY: mp_para_env_type
    USE sbe_utils,                      ONLY: print_sbe_header_info
+   USE sbe_types,                      ONLY: sbe_env_type, &
+                                             init_sbe_env, &
+                                             release_sbe_env
    USE cp_dbcsr_api,                   ONLY: dbcsr_p_type, &
                                              dbcsr_type, &
                                              dbcsr_create, &
@@ -59,17 +62,11 @@ CONTAINS
    SUBROUTINE run_propagation_sbe(force_env)
       TYPE(force_env_type), POINTER                      :: force_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(kpoint_type), POINTER                         :: kpoints, &
-                                                            kpoints_all
+      TYPE(kpoint_type), POINTER                         :: kpoints
       CHARACTER(len=*), PARAMETER                        :: routineN="run_propagation_sbe"
       INTEGER                                            :: i, &
                                                             j, &
-                                                            unit_nr, &
-                                                            n_spin, &
-                                                            n_images, &
-                                                            mat_rows, &
-                                                            mat_cols
-      INTEGER, DIMENSION(2)                              :: dbcsr_shape
+                                                            unit_nr
       REAL(kind=dp), DIMENSION(:, :), POINTER            :: xkp
       REAL(kind=dp), DIMENSION(3)                        :: single_k
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s_kp, matrix_h_kp
@@ -77,12 +74,10 @@ CONTAINS
       INTEGER, DIMENSION(:, :), POINTER                  :: index_to_cell
       TYPE(dbcsr_type)                                   :: s_k, sc_k
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-              POINTER                                    :: sab_nl, sab_all
-      REAL(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE     :: array
+              POINTER                                    :: sab_nl
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: k_array_complex
       INTEGER                                            :: handle
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(sbe_env_type), POINTER                        :: sbe_env
 
       unit_nr = cp_logger_get_default_io_unit()
       IF (unit_nr > 0) CALL print_sbe_header_info(unit_nr)
@@ -96,19 +91,18 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      ! Init the environment
+      CALL init_sbe_env(sbe_env, force_env)
+
       ! Investigate h and S matrices
       CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, &
-                      matrix_ks_kp=matrix_h_kp, kpoints=kpoints, sab_all=sab_all, &
-                      dft_control=dft_control, para_env=para_env)
-      IF (unit_nr > 0) PRINT *, "SBE| ", "S matrix kp shape ", SHAPE(matrix_s_kp)
-      IF (unit_nr > 0) PRINT *, "SBE| ", "h matrix kp shape ", SHAPE(matrix_h_kp)
+                      matrix_ks_kp=matrix_h_kp, kpoints=kpoints)
+      IF (unit_nr > 0) PRINT *, "SBE| ", "S matrix kp shape ", SHAPE(sbe_env%overlap_rs)
+      IF (unit_nr > 0) PRINT *, "SBE| ", "h matrix kp shape ", SHAPE(sbe_env%ham_zero_rs)
       ! Get kpoint information
       CALL get_kpoint_info(kpoints, index_to_cell=index_to_cell, cell_to_index=cell_to_index, xkp=xkp, &
               sab_nl=sab_nl)
 
-      ! Construct new kpoints without symmetry
-      CALL kpoint_create(kpoints_all)
-      CALL kpoint_init_cell_index(kpoints_all, sab_all, para_env, dft_control)
       ! === Transformation by the original method
       CALL dbcsr_create(s_k, name="S(k)", template=matrix_s_kp(1,1)%matrix)
       CALL dbcsr_create(sc_k, name="S(k)", template=matrix_s_kp(1,1)%matrix)
@@ -122,57 +116,32 @@ CONTAINS
       CALL dbcsr_release(s_k)
       CALL dbcsr_release(sc_k)
       ! === Transformation by the duplicated method
-      dbcsr_shape = SHAPE(matrix_s_kp)
-      n_spin = dbcsr_shape(1)
-      n_images = SIZE(kpoints_all%index_to_cell, 1)
-      CALL dbcsr_get_info(matrix_s_kp(1,1)%matrix, nfullrows_total=mat_rows, nfullcols_total=mat_cols)
-      ALLOCATE (array(n_spin, mat_rows, mat_cols, n_images), source=0.0_dp)
-      ! TODO : Update for the number of matrices stored per each rank
       IF (unit_nr > 0) WRITE(unit_nr, "(A52,E25.3,A3)") &
-              " SBE| Approximate memory per rank for overlap matrix", REAL(n_spin, kind=dp) * &
-              REAL(n_images, kind=dp) * REAL(mat_rows, kind=dp) * REAL(mat_cols, kind=dp) / &
+              " SBE| Approximate memory per rank for overlap matrix", REAL(sbe_env%n_spin, kind=dp) * &
+              REAL(sbe_env%n_images, kind=dp) * REAL(sbe_env%n_ao, kind=dp) * REAL(sbe_env%n_ao, kind=dp) / &
               (1024.0_dp * 1024.0_dp * 1024.0_dp), "GiB"
-      CALL replicate_rs_matrices(matrix_s_kp, kpoints, array, kpoints_all%cell_to_index)
-      ! IF (unit_nr > 0) THEN
-      !    DO i=1,mat_rows
-      !       DO j=1,mat_cols
-      !          PRINT *, i, j, array(1,2,i, j)
-      !       END DO
-      !    END DO
-      ! END IF
-      ! IF (unit_nr > 0) THEN
-      !    DO i=1,mat_rows
-      !       DO j=1,mat_cols
-      !          PRINT *, i, j, array(1,3,i, j)
-      !       END DO
-      !    END DO
-      ! END IF
-      ! IF (unit_nr > 0) THEN
-      !    DO i=1,mat_rows
-      !       DO j=1,mat_cols
-      !          PRINT *, i, j, array(1,3,i, j)
-      !       END DO
-      !    END DO
-      ! END IF
-      ALLOCATE (k_array_complex(mat_rows, mat_cols), source=CMPLX(0.0, 0.0, kind=dp))
-      CALL rs_to_kp(array(1,:,:,:), k_array_complex, kpoints_all%index_to_cell, single_k)
+      CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index)
+
+      ALLOCATE (k_array_complex(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+      CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), k_array_complex, sbe_env%kpoints%index_to_cell, single_k)
       IF (unit_nr > 0) THEN
-         PRINT *, "=== Imag part"
-         DO j=1,mat_cols
-            DO i=1,mat_rows
+         PRINT *, "=== Real part"
+         DO j=1,sbe_env%n_ao
+            DO i=1,sbe_env%n_ao
                PRINT *, i, j, REAL(k_array_complex(i, j))
             END DO
          END DO
-         PRINT *, "=== Real part"
-         DO j=1,mat_cols
-            DO i=1,mat_rows
+         PRINT *, "=== Imag part"
+         DO j=1,sbe_env%n_ao
+            DO i=1,sbe_env%n_ao
                PRINT *, i, j, AIMAG(k_array_complex(i, j))
             END DO
          END DO
       END IF
-      DEALLOCATE (array)
+
+      ! Deallocations
       DEALLOCATE (k_array_complex)
-      CALL kpoint_release(kpoints_all)
+      CALL release_sbe_env(sbe_env)
 
       CALL timestop(handle)
    END SUBROUTINE run_propagation_sbe
