@@ -64,15 +64,12 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(kpoint_type), POINTER                         :: kpoints
       CHARACTER(len=*), PARAMETER                        :: routineN="run_propagation_sbe"
-      INTEGER                                            :: i, &
-                                                            j, &
-                                                            unit_nr
-      REAL(kind=dp), DIMENSION(:, :), POINTER            :: xkp
-      REAL(kind=dp), DIMENSION(3)                        :: single_k
+      INTEGER                                            :: unit_nr!, &
+                                                            ! i, &
+                                                            ! j, &
+      ! REAL(kind=dp), DIMENSION(3)                        :: single_k
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s_kp, matrix_h_kp
-      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index
-      INTEGER, DIMENSION(:, :), POINTER                  :: index_to_cell
-      TYPE(dbcsr_type)                                   :: s_k, sc_k
+      ! TYPE(dbcsr_type)                                   :: s_k, sc_k
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                    :: sab_nl
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: k_array_complex
@@ -92,29 +89,27 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       ! Init the environment
+      NULLIFY (sbe_env)
       CALL init_sbe_env(sbe_env, force_env)
 
       ! Investigate h and S matrices
       CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, &
                       matrix_ks_kp=matrix_h_kp, kpoints=kpoints)
-      IF (unit_nr > 0) PRINT *, "SBE| ", "S matrix kp shape ", SHAPE(sbe_env%overlap_rs)
-      IF (unit_nr > 0) PRINT *, "SBE| ", "h matrix kp shape ", SHAPE(sbe_env%ham_zero_rs)
       ! Get kpoint information
-      CALL get_kpoint_info(kpoints, index_to_cell=index_to_cell, cell_to_index=cell_to_index, xkp=xkp, &
-              sab_nl=sab_nl)
+      CALL get_kpoint_info(kpoints, sab_nl=sab_nl)
 
-      ! === Transformation by the original method
-      CALL dbcsr_create(s_k, name="S(k)", template=matrix_s_kp(1,1)%matrix)
-      CALL dbcsr_create(sc_k, name="S(k)", template=matrix_s_kp(1,1)%matrix)
-      CALL cp_dbcsr_alloc_block_from_nbl(s_k, sab_nl)
-      CALL cp_dbcsr_alloc_block_from_nbl(sc_k, sab_nl)
-      single_k(:) = xkp(:,1)
-      CALL rskp_transform(rmatrix=s_k, cmatrix=sc_k, rsmat=matrix_s_kp, ispin=1, xkp=single_k, &
-              cell_to_index=cell_to_index, sab_nl=sab_nl)
-      CALL dbcsr_print(s_k)
-      CALL dbcsr_print(sc_k)
-      CALL dbcsr_release(s_k)
-      CALL dbcsr_release(sc_k)
+      ! ! === Transformation by the original method
+      ! CALL dbcsr_create(s_k, name="S(k)", template=matrix_s_kp(1,1)%matrix)
+      ! CALL dbcsr_create(sc_k, name="S(k)", template=matrix_s_kp(1,1)%matrix)
+      ! CALL cp_dbcsr_alloc_block_from_nbl(s_k, sab_nl)
+      ! CALL cp_dbcsr_alloc_block_from_nbl(sc_k, sab_nl)
+      ! single_k(:) = xkp(:,1)
+      ! CALL rskp_transform(rmatrix=s_k, cmatrix=sc_k, rsmat=matrix_s_kp, ispin=1, xkp=single_k, &
+      !         cell_to_index=cell_to_index, sab_nl=sab_nl)
+      ! CALL dbcsr_print(s_k)
+      ! CALL dbcsr_print(sc_k)
+      ! CALL dbcsr_release(s_k)
+      ! CALL dbcsr_release(sc_k)
       ! === Transformation by the duplicated method
       IF (unit_nr > 0) WRITE(unit_nr, "(A52,E25.3,A3)") &
               " SBE| Approximate memory per rank for overlap matrix", REAL(sbe_env%n_spin, kind=dp) * &
@@ -123,21 +118,7 @@ CONTAINS
       CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index)
 
       ALLOCATE (k_array_complex(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
-      CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), k_array_complex, sbe_env%kpoints%index_to_cell, single_k)
-      IF (unit_nr > 0) THEN
-         PRINT *, "=== Real part"
-         DO j=1,sbe_env%n_ao
-            DO i=1,sbe_env%n_ao
-               PRINT *, i, j, REAL(k_array_complex(i, j))
-            END DO
-         END DO
-         PRINT *, "=== Imag part"
-         DO j=1,sbe_env%n_ao
-            DO i=1,sbe_env%n_ao
-               PRINT *, i, j, AIMAG(k_array_complex(i, j))
-            END DO
-         END DO
-      END IF
+      CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), k_array_complex, sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,1))
 
       ! Deallocations
       DEALLOCATE (k_array_complex)
