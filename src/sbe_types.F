@@ -27,11 +27,13 @@ MODULE sbe_types
                            dbcsr_get_info
    USE cell_types, ONLY: cell_type
    USE input_section_types, ONLY: section_vals_type, &
-                                  section_vals_get_subs_vals
+                                  section_vals_get_subs_vals, &
+                                  section_vals_val_get
    USE post_scf_bandstructure_utils, ONLY: compute_xkp
    USE cp_log_handling, ONLY: cp_logger_get_default_io_unit, &
                               cp_logger_type, &
                               cp_get_default_logger
+   USE physcon, ONLY: femtoseconds
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -55,13 +57,27 @@ MODULE sbe_types
       INTEGER                                            :: n_ao = 0, &
                                                             n_images = 0, &
                                                             n_spin = 1, &
-                                                            unit_nr
+                                                            unit_nr = 6, &
+                                                            sim_nsteps = -1, &
+                                                            sim_start = 0, &
+                                                            sim_start_orig = 0, &
+                                                            sim_step = 0
+      REAL(kind=dp)                                      :: sim_dt = 1.0e-3_dp / femtoseconds, &
+                                                            sim_time = 0.0_dp
+      REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: time_trace
    END TYPE sbe_env_type
 
    PUBLIC :: sbe_env_type, &
              init_sbe_env, &
              release_sbe_env
 CONTAINS
+! **************************************************************************************************
+!> \brief Initializes the sbe_env - allocates objects and retrieves parameters from DFT
+!> \param sbe_env null pointer to the sbe_env type, which will be allocated and filled
+!> \param force_env pointer to the force env type, which contains data from the DFT run
+!> \author Stepan Marek
+!> \date 11.2025
+! **************************************************************************************************
    SUBROUTINE init_sbe_env(sbe_env, force_env)
       TYPE(sbe_env_type), POINTER                        :: sbe_env
       TYPE(force_env_type), POINTER                      :: force_env
@@ -141,8 +157,23 @@ CONTAINS
       ALLOCATE (sbe_env%overlap_rs(1, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
       ALLOCATE (sbe_env%ham_zero_rs(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
 
+      ! Get the other parameters for the simulation - time, number of steps etc
+      CALL section_vals_val_get(force_env%root_section, "MOTION%MD%TIMESTEP", r_val=sbe_env%sim_dt)
+      CALL section_vals_val_get(force_env%root_section, "MOTION%MD%STEPS", i_val=sbe_env%sim_nsteps)
+      CALL section_vals_val_get(force_env%root_section, "MOTION%MD%STEP_START_VAL", i_val=sbe_env%sim_start)
+      sbe_env%sim_start_orig = sbe_env%sim_start
+
+      ! Allocate time
+      ALLOCATE (sbe_env%time_trace(sbe_env%sim_nsteps - sbe_env%sim_start + 1), source=0.0_dp)
+
       CALL timestop(handle)
    END SUBROUTINE init_sbe_env
+! **************************************************************************************************
+!> \brief Deallocates the memory and the structure
+!> \param sbe_env pointer to the existing sbe_env structure
+!> \author Stepan Marek
+!> \date 11.2025
+! **************************************************************************************************
    SUBROUTINE release_sbe_env(sbe_env)
       TYPE(sbe_env_type), POINTER                        :: sbe_env
 
@@ -151,10 +182,18 @@ CONTAINS
       CALL kpoint_release(sbe_env%kpoints)
       DEALLOCATE (sbe_env%overlap_rs)
       DEALLOCATE (sbe_env%ham_zero_rs)
+      DEALLOCATE (sbe_env%time_trace)
 
       ! Finish by deallocating the pointer itself
       DEALLOCATE (sbe_env)
    END SUBROUTINE release_sbe_env
+! **************************************************************************************************
+!> \brief Calculates the kpoint distribution - tries put equal number of kpoints on each MPI rank
+!> \param kpoints kpoint_type structure, containing nkp and destination for the distribution
+!> \param efficiency_opt reports optional efficiency (actual work/(num_pe * max_work_per_pe))
+!> \author Stepan Marek
+!> \date 11.2025
+! **************************************************************************************************
    SUBROUTINE sbe_create_kpoint_dist(kpoints, efficiency_opt)
       TYPE(kpoint_type), POINTER                         :: kpoints
       REAL(kind=dp), OPTIONAL                            :: efficiency_opt
