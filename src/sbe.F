@@ -42,6 +42,7 @@ MODULE sbe
    USE kpoint_k_r_trafo_simple,        ONLY: replicate_rs_matrices, &
                                              rs_to_kp
    USE cp_control_types,               ONLY: dft_control_type
+   USE physcon,                        ONLY: femtoseconds
 
 #include "./base/base_uses.f90"
 
@@ -64,16 +65,17 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(kpoint_type), POINTER                         :: kpoints
       CHARACTER(len=*), PARAMETER                        :: routineN="run_propagation_sbe"
-      INTEGER                                            :: unit_nr!, &
+      INTEGER                                            :: unit_nr, &
+                                                            i_step, &
                                                             ! i, &
                                                             ! j, &
+                                                            handle
       ! REAL(kind=dp), DIMENSION(3)                        :: single_k
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s_kp, matrix_h_kp
       ! TYPE(dbcsr_type)                                   :: s_k, sc_k
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                    :: sab_nl
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: k_array_complex
-      INTEGER                                            :: handle
       TYPE(sbe_env_type), POINTER                        :: sbe_env
 
       unit_nr = cp_logger_get_default_io_unit()
@@ -116,9 +118,17 @@ CONTAINS
               REAL(sbe_env%n_images, kind=dp) * REAL(sbe_env%n_ao, kind=dp) * REAL(sbe_env%n_ao, kind=dp) / &
               (1024.0_dp * 1024.0_dp * 1024.0_dp), "GiB"
       CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index)
-
       ALLOCATE (k_array_complex(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
-      CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), k_array_complex, sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,1))
+
+      ! Start the actual simulation
+      DO i_step=sbe_env%sim_start, sbe_env%sim_nsteps
+         CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), k_array_complex, sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,1))
+         sbe_env%sim_step = i_step
+         sbe_env%sim_time = REAL(i_step, kind=dp) * sbe_env%sim_dt
+         ! Append to the trace
+         sbe_env%time_trace(i_step - sbe_env%sim_start + 1) = sbe_env%sim_time
+      END DO
+      IF (sbe_env%unit_nr > 0) PRINT *, sbe_env%time_trace * femtoseconds
 
       ! Deallocations
       DEALLOCATE (k_array_complex)
