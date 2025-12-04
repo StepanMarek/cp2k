@@ -36,6 +36,7 @@ MODULE mathlib
              jacobi, &
              diamat_all, &
              invmat, &
+             invcmat, &
              invmat_symm, &
              invert_matrix, &
              get_pseudo_inverse_svd, &
@@ -2023,5 +2024,38 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE dgemm_square_3
+! **************************************************************************************************
+!> \brief returns inverse of complex matrix using the lapack routines ZGETRF and ZGETRI, inplace
+!> \param a ...
+!> \param info ...
+! **************************************************************************************************
+   SUBROUTINE invcmat(a, info)
+      COMPLEX(KIND=dp), INTENT(INOUT)                    :: a(:, :)
+      INTEGER, INTENT(OUT)                               :: info
+
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'invcmat'
+
+      INTEGER                                            :: handle, lwork, n
+      INTEGER, ALLOCATABLE                               :: ipiv(:)
+      COMPLEX(KIND=dp), ALLOCATABLE                      :: work(:)
+
+      CALL timeset(routineN, handle)
+
+      n = SIZE(a, 1)
+      lwork = 20*n
+      ALLOCATE (ipiv(n))
+      ALLOCATE (work(lwork))
+      ipiv = 0
+      work = 0._dp
+      info = 0
+      CALL zgetrf(n, n, a, n, ipiv, info)
+      IF (info == 0) THEN
+         CALL zgetri(n, a, n, ipiv, work, lwork, info)
+      END IF
+      DEALLOCATE (ipiv, work)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE invcmat
 
 END MODULE mathlib
