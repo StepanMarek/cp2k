@@ -34,6 +34,7 @@ MODULE sbe_types
                               cp_logger_type, &
                               cp_get_default_logger
    USE physcon, ONLY: femtoseconds
+   USE input_constants, ONLY: sbe_propagator_rk4
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -68,6 +69,7 @@ MODULE sbe_types
                                                             sim_start = 0, &
                                                             sim_start_orig = 0, &
                                                             sim_step = 0
+      INTEGER                                            :: propagator_method = sbe_propagator_rk4
       REAL(kind=dp)                                      :: sim_dt = 1.0e-3_dp / femtoseconds, &
                                                             sim_time = 0.0_dp
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: time_trace
@@ -187,6 +189,10 @@ CONTAINS
       CALL section_vals_val_get(force_env%root_section, "MOTION%MD%STEPS", i_val=sbe_env%sim_nsteps)
       CALL section_vals_val_get(force_env%root_section, "MOTION%MD%STEP_START_VAL", i_val=sbe_env%sim_start)
       sbe_env%sim_start_orig = sbe_env%sim_start
+
+      ! Propagator method
+      CALL section_vals_val_get(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%PROPAGATOR", &
+                                i_val=sbe_env%propagator_method)
 
       ! Allocate time
       ALLOCATE (sbe_env%time_trace(sbe_env%sim_nsteps - sbe_env%sim_start + 1), source=0.0_dp)
