@@ -49,7 +49,7 @@ MODULE input_cp2k_dft
         sccs_fattebert_gygi, sic_ad, sic_eo, sic_list_all, sic_list_unpaired, sic_mauri_spz, &
         sic_mauri_us, sic_none, slater, use_mom_ref_coac, use_mom_ref_com, use_mom_ref_user, &
         use_mom_ref_zero, use_restart_wfn, use_rt_restart, use_scf_wfn, weight_type_mass, &
-        weight_type_unit
+        weight_type_unit, sbe_propagator_euler, sbe_propagator_rk4
    USE input_cp2k_almo,                 ONLY: create_almo_scf_section
    USE input_cp2k_as,                   ONLY: create_active_space_section
    USE input_cp2k_ec,                   ONLY: create_ec_section
@@ -2173,6 +2173,16 @@ CONTAINS
               enum_i_vals=(/rtp_method_tddft, rtp_method_sbe/),&
               enum_c_vals=s2a("TDDFT", "SBE"), &
               enum_desc=s2a("Run propagation with TDDFT.", "Run propagation with SBE."))
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      ! Propagator
+      CALL keyword_create(keyword, __LOCATION__, name="PROPAGATOR", &
+              description="Choose a propagator/numerical integrator scheme.", &
+              default_i_val=sbe_propagator_rk4, &
+              enum_i_vals=(/sbe_propagator_euler, sbe_propagator_rk4/),&
+              enum_c_vals=s2a("EULER", "RK4"), &
+              enum_desc=s2a("Forwards Euler propagator", "RK4 propagator"))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

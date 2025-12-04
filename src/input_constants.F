@@ -951,6 +951,9 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: rtp_bse_ham_ks = 1, &
                                                rtp_bse_ham_g0w0 = 2
 
+   INTEGER, PARAMETER, PUBLIC               :: sbe_propagator_euler = 1, &
+                                               sbe_propagator_rk4 = 4
+
    ! type of reference for RTP%PRINT%PROJECTION_MO
    INTEGER, PARAMETER, PUBLIC               :: proj_mo_ref_scf = 1, &
                                                proj_mo_ref_xas_tdp = 2
