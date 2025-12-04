@@ -48,12 +48,18 @@ MODULE sbe_types
 ! **************************************************************************************************
    TYPE sbe_env_type
       TYPE(kpoint_type), POINTER                         :: kpoints => NULL()
-      ! dim 1 : spin/kind, dim 2 : rows, dim 3 : cols
-      COMPLEX(kind=dp), DIMENSION(:,:,:), ALLOCATABLE    :: overlap_k, &
-                                                            inv_overlap_k, &
-                                                            ham_zero_k
+      INTEGER                                            :: local_nkp = 1, &
+                                                            mepos = 0
+      ! dim 1 : spin/kind, dim 2 : rows, dim 3 : cols, dim 4 : kp
+      COMPLEX(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE  :: overlap_kp, &
+                                                            inv_overlap_kp, &
+                                                            ham_zero_kp
       REAL(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE     :: overlap_rs, &
                                                             ham_zero_rs
+      ! Propagation target - density matrix
+      COMPLEX(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE  :: densmat, &
+                                                            densmat_next, &
+                                                            densmat_work
       INTEGER                                            :: n_ao = 0, &
                                                             n_images = 0, &
                                                             n_spin = 1, &
@@ -139,14 +145,17 @@ CONTAINS
       END SELECT
       ! TODO : Get the kpoint distribution (unless too hard, then just use modulos)
       CALL sbe_create_kpoint_dist(sbe_env%kpoints, efficiency)
+      sbe_env%mepos = sbe_env%kpoints%para_env%mepos + 1
+      sbe_env%local_nkp = sbe_env%kpoints%kp_dist(2, sbe_env%mepos) - &
+                          sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
       logger => cp_get_default_logger()
       sbe_env%unit_nr = cp_logger_get_default_io_unit(logger)
       IF (sbe_env%unit_nr > 0) THEN
          WRITE (sbe_env%unit_nr, "(A36,F42.2,A2)") " SBE| Kpoint work balance efficiency", 100.0_dp * efficiency, " %"
          DO i=1, sbe_env%kpoints%para_env%num_pe
-            WRITE (sbe_env%unit_nr, "(A11,I4,A13,I48,I4)") " SBE| Task ", i-1, &
+            WRITE (sbe_env%unit_nr, "(A11,I4,A13,I38,I4,A6,I4)") " SBE| Task ", i-1, &
                " kpoint range", sbe_env%kpoints%kp_dist(1,i), &
-               sbe_env%kpoints%kp_dist(2,i)
+               sbe_env%kpoints%kp_dist(2,i), " total", sbe_env%local_nkp
          END DO
       END IF
 
@@ -156,6 +165,22 @@ CONTAINS
       sbe_env%n_spin = SIZE(matrix_ks_kp, 1)
       ALLOCATE (sbe_env%overlap_rs(1, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
       ALLOCATE (sbe_env%ham_zero_rs(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
+
+      ! Allocate k-matrices
+      ! TODO : Only allocate num_threads kpoints, to save memory?
+      ALLOCATE (sbe_env%overlap_kp(1, sbe_env%n_ao, &
+                sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%inv_overlap_kp(1, sbe_env%n_ao, &
+                sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%ham_zero_kp(sbe_env%n_spin, sbe_env%n_ao, &
+                sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%densmat(sbe_env%n_spin, sbe_env%n_ao, &
+                sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%densmat_next(sbe_env%n_spin, sbe_env%n_ao, &
+                sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
+      ! TODO : Different numbers for different propagators - we start with euler/RK4, which is determined by RK4
+      ALLOCATE (sbe_env%densmat_work(4, sbe_env%n_ao, &
+                sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
 
       ! Get the other parameters for the simulation - time, number of steps etc
       CALL section_vals_val_get(force_env%root_section, "MOTION%MD%TIMESTEP", r_val=sbe_env%sim_dt)
@@ -181,8 +206,13 @@ CONTAINS
 
       CALL kpoint_release(sbe_env%kpoints)
       DEALLOCATE (sbe_env%overlap_rs)
+      DEALLOCATE (sbe_env%overlap_kp)
+      DEALLOCATE (sbe_env%inv_overlap_kp)
       DEALLOCATE (sbe_env%ham_zero_rs)
+      DEALLOCATE (sbe_env%ham_zero_kp)
       DEALLOCATE (sbe_env%time_trace)
+      DEALLOCATE (sbe_env%densmat)
+      DEALLOCATE (sbe_env%densmat_next)
 
       ! Finish by deallocating the pointer itself
       DEALLOCATE (sbe_env)

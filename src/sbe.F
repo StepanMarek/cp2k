@@ -43,6 +43,8 @@ MODULE sbe
                                              rs_to_kp
    USE cp_control_types,               ONLY: dft_control_type
    USE physcon,                        ONLY: femtoseconds
+   USE mathlib,                        ONLY: invcmat, &
+                                             gemm_square
 
 #include "./base/base_uses.f90"
 
@@ -67,15 +69,16 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN="run_propagation_sbe"
       INTEGER                                            :: unit_nr, &
                                                             i_step, &
-                                                            ! i, &
-                                                            ! j, &
+                                                            i, &
+                                                            i_local, &
+                                                            j, &
+                                                            info, &
                                                             handle
       ! REAL(kind=dp), DIMENSION(3)                        :: single_k
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s_kp, matrix_h_kp
       ! TYPE(dbcsr_type)                                   :: s_k, sc_k
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                    :: sab_nl
-      COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: k_array_complex
       TYPE(sbe_env_type), POINTER                        :: sbe_env
 
       unit_nr = cp_logger_get_default_io_unit()
@@ -118,22 +121,148 @@ CONTAINS
               REAL(sbe_env%n_images, kind=dp) * REAL(sbe_env%n_ao, kind=dp) * REAL(sbe_env%n_ao, kind=dp) / &
               (1024.0_dp * 1024.0_dp * 1024.0_dp), "GiB"
       CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index)
-      ALLOCATE (k_array_complex(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+      CALL replicate_rs_matrices(matrix_h_kp, kpoints, sbe_env%ham_zero_rs, sbe_env%kpoints%cell_to_index)
+
+      ! DEBUG
+      sbe_env%densmat(1,1,1,1) = CMPLX(1.0,0.0,kind=dp)
+      sbe_env%densmat(1,2,1,1) = CMPLX(0.0,1.0,kind=dp)
+      sbe_env%densmat(1,1,2,1) = CMPLX(0.0,-1.0,kind=dp)
 
       ! Start the actual simulation
       DO i_step=sbe_env%sim_start, sbe_env%sim_nsteps
-         CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), k_array_complex, sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,1))
+         ! Update timestep parameters
          sbe_env%sim_step = i_step
          sbe_env%sim_time = REAL(i_step, kind=dp) * sbe_env%sim_dt
          ! Append to the trace
          sbe_env%time_trace(i_step - sbe_env%sim_start + 1) = sbe_env%sim_time
+         ! TODO : Update the kpoints to set the field
+
+         ! Iteration over local kpoints
+         ! TODO : Run OMP over local kpoints or not?
+         DO i=sbe_env%kpoints%kp_dist(1,sbe_env%mepos), sbe_env%kpoints%kp_dist(2, sbe_env%mepos)
+            i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
+            ! TODO : Recalculate the k-matrices at new kpoints
+            ! TODO : For fields that are no longer changing, stop the update to speed up the simulation? Maybe via metric change?
+            ! Overlap
+            CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(1,:,:,i_local), &
+                          sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
+            ! Inverse overlap
+            sbe_env%inv_overlap_kp(1,:,:,i_local) = sbe_env%overlap_kp(1,:,:,i_local)
+            CALL invcmat(sbe_env%inv_overlap_kp(1,:,:,i_local), info)
+            IF (info /= 0) THEN
+               CALL cp_abort(__LOCATION__, "Overlap matrix inverse failed.")
+            END IF
+            ! Hamiltonian
+            DO j=1,sbe_env%n_spin
+               CALL rs_to_kp(sbe_env%ham_zero_rs(j,:,:,:), sbe_env%ham_zero_kp(j,:,:,i_local), &
+                             sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
+            END DO
+
+            ! TODO : Propagate the density
+            DO j=1, sbe_env%n_spin
+               CALL propagate_density(sbe_env, sbe_env%densmat, sbe_env%densmat_next, info)
+            END DO
+         END DO
+         ! TODO : commit to timestep - check density criteria fulfilled in SC schemes
+         IF (info > 0) THEN
+            CALL cp_abort(__LOCATION__, "Failed to propagate the density matrix.")
+         END IF
+         sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
+         
+         ! Outputs
+         IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E12.3E3)") &
+            " SBE| Timestep ", i_step, &
+            " time ", sbe_env%sim_time * femtoseconds, " re rho(1,1,1,1) ", REAL(sbe_env%densmat_next(1,1,1,1))
       END DO
-      IF (sbe_env%unit_nr > 0) PRINT *, sbe_env%time_trace * femtoseconds
 
       ! Deallocations
-      DEALLOCATE (k_array_complex)
       CALL release_sbe_env(sbe_env)
 
       CALL timestop(handle)
    END SUBROUTINE run_propagation_sbe
+! **************************************************************************************************
+!> \brief Propagates from one density to other, switch between different propagators here
+!> \param sbe_env SBE environment
+!> \param densmat_old Explicit old density
+!> \param densmat_new Explicit new density
+!> \param info Whether the propagation was successful, useful for self-consistent propagators
+!> \author Stepan Marek
+!> \date 12.2025
+! **************************************************************************************************
+   SUBROUTINE propagate_density(sbe_env, densmat_old, densmat_new, info)
+      TYPE(sbe_env_type), POINTER, INTENT(IN)            :: sbe_env
+      COMPLEX(kind=dp), DIMENSION(:,:,:,:), INTENT(IN)   :: densmat_old
+      COMPLEX(kind=dp), DIMENSION(:,:,:,:), INTENT(OUT)  :: densmat_new
+      INTEGER, INTENT(OUT)                               :: info
+      CHARACTER(len=*), PARAMETER                        :: routineN="propagate_density"
+      INTEGER                                            :: handle, &
+                                                            ispin, &
+                                                            ikp, &
+                                                            propagator_method
+
+      CALL timeset(routineN, handle)
+
+      ! DEBUG
+      propagator_method = 1
+      ! TODO : Switch/select for different propagators
+      DO ispin=1,sbe_env%n_spin
+         DO ikp=1,sbe_env%local_nkp
+            ! RK-4
+            IF (propagator_method == 4) THEN
+               CALL propagator_commutator(sbe_env%densmat_work(1,:,:,ikp), &
+                                          sbe_env%inv_overlap_kp(1,:,:,ikp), &
+                                          sbe_env%ham_zero_kp(ispin,:,:,ikp), &
+                                          densmat_old(ispin,:,:,ikp), &
+                                          densmat_new(ispin,:,:,ikp))
+               CALL propagator_commutator(sbe_env%densmat_work(2,:,:,ikp), &
+                                          sbe_env%inv_overlap_kp(1,:,:,ikp), &
+                                          sbe_env%ham_zero_kp(ispin,:,:,ikp), &
+                                          densmat_old(ispin,:,:,ikp) + &
+                                          sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(1,:,:,ikp), &
+                                          densmat_new(ispin,:,:,ikp))
+               CALL propagator_commutator(sbe_env%densmat_work(3,:,:,ikp), &
+                                          sbe_env%inv_overlap_kp(1,:,:,ikp), &
+                                          sbe_env%ham_zero_kp(ispin,:,:,ikp), &
+                                          densmat_old(ispin,:,:,ikp) + &
+                                          sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(2,:,:,ikp), &
+                                          densmat_new(ispin,:,:,ikp))
+               CALL propagator_commutator(sbe_env%densmat_work(4,:,:,ikp), &
+                                          sbe_env%inv_overlap_kp(1,:,:,ikp), &
+                                          sbe_env%ham_zero_kp(ispin,:,:,ikp), &
+                                          densmat_old(ispin,:,:,ikp) + &
+                                          sbe_env%sim_dt * sbe_env%densmat_work(3,:,:,ikp), &
+                                          densmat_new(ispin,:,:,ikp))
+               densmat_new(ispin,:,:,ikp) = densmat_old(ispin,:,:,ikp) + &
+                  sbe_env%sim_dt * (sbe_env%densmat_work(1,:,:,ikp) + 2.0_dp * sbe_env%densmat_work(2,:,:,ikp) + &
+                     2.0_dp * sbe_env%densmat_work(3,:,:,ikp) + sbe_env%densmat_work(4,:,:,ikp)) / 6.0_dp
+            ELSE
+               ! Default to forwards Euler
+               CALL propagator_commutator(sbe_env%densmat_work(1,:,:,ikp), &
+                                          sbe_env%inv_overlap_kp(1,:,:,ikp), &
+                                          sbe_env%ham_zero_kp(ispin,:,:,ikp), &
+                                          densmat_old(ispin,:,:,ikp), &
+                                          densmat_new(ispin,:,:,ikp))
+               densmat_new(ispin,:,:,ikp) = densmat_old(ispin,:,:,ikp) + &
+                  sbe_env%sim_dt * sbe_env%densmat_work(1,:,:,ikp)
+            END IF
+         END DO
+      END DO
+      info = 0
+
+      CALL timestop(handle)
+   END SUBROUTINE propagate_density
+   SUBROUTINE propagator_commutator(commutator, inv_overlap, ham, densmat, work)
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(IN)       :: densmat, &
+                                                            inv_overlap, &
+                                                            ham
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(OUT)      :: commutator, &
+                                                            work
+
+      ! S^(-1) h rho(t)
+      CALL gemm_square(inv_overlap, 'N', ham, 'N', densmat, 'N', work)
+      ! rho (t) h S^(-1)
+      CALL gemm_square(densmat, 'N', ham, 'N', inv_overlap, 'N', commutator)
+
+      commutator(:,:) = CMPLX(0.0, -1.0, kind=dp) * (work(:,:) - commutator(:,:))
+   END SUBROUTINE propagator_commutator
 END MODULE sbe
