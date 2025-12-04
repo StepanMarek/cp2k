@@ -10,7 +10,8 @@
 !> \date 10.2025
 ! **************************************************************************************************
 MODULE sbe
-   USE input_constants,                ONLY: rtp_method_sbe
+   USE input_constants,                ONLY: rtp_method_sbe, &
+                                             sbe_propagator_rk4
    USE force_env_types,                ONLY: force_env_type, &
                                              force_env_get
    USE force_env_methods,              ONLY: force_env_calc_energy_force
@@ -162,11 +163,11 @@ CONTAINS
             DO j=1, sbe_env%n_spin
                CALL propagate_density(sbe_env, sbe_env%densmat, sbe_env%densmat_next, info)
             END DO
+            ! Info can report e.g. self-consistency failures
+            IF (info > 0) THEN
+               CALL cp_abort(__LOCATION__, "Failed to propagate the density matrix.")
+            END IF
          END DO
-         ! TODO : commit to timestep - check density criteria fulfilled in SC schemes
-         IF (info > 0) THEN
-            CALL cp_abort(__LOCATION__, "Failed to propagate the density matrix.")
-         END IF
          sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
          
          ! Outputs
@@ -208,7 +209,7 @@ CONTAINS
       DO ispin=1,sbe_env%n_spin
          DO ikp=1,sbe_env%local_nkp
             ! RK-4
-            IF (propagator_method == 4) THEN
+            IF (sbe_env%propagator_method == sbe_propagator_rk4) THEN
                CALL propagator_commutator(sbe_env%densmat_work(1,:,:,ikp), &
                                           sbe_env%inv_overlap_kp(1,:,:,ikp), &
                                           sbe_env%ham_zero_kp(ispin,:,:,ikp), &
@@ -235,6 +236,7 @@ CONTAINS
                densmat_new(ispin,:,:,ikp) = densmat_old(ispin,:,:,ikp) + &
                   sbe_env%sim_dt * (sbe_env%densmat_work(1,:,:,ikp) + 2.0_dp * sbe_env%densmat_work(2,:,:,ikp) + &
                      2.0_dp * sbe_env%densmat_work(3,:,:,ikp) + sbe_env%densmat_work(4,:,:,ikp)) / 6.0_dp
+               info = 0
             ELSE
                ! Default to forwards Euler
                CALL propagator_commutator(sbe_env%densmat_work(1,:,:,ikp), &
@@ -244,13 +246,26 @@ CONTAINS
                                           densmat_new(ispin,:,:,ikp))
                densmat_new(ispin,:,:,ikp) = densmat_old(ispin,:,:,ikp) + &
                   sbe_env%sim_dt * sbe_env%densmat_work(1,:,:,ikp)
+               info = 0
             END IF
+            ! If any propagator fails, report this
+            IF ( info /= 0 ) EXIT
          END DO
+         IF ( info /= 0 ) EXIT
       END DO
-      info = 0
 
       CALL timestop(handle)
    END SUBROUTINE propagate_density
+! **************************************************************************************************
+!> \brief Calculates the propagator commutator, used in different propagator methods
+!> \param commutator Resulting commutator matrix
+!> \param inv_overlap Inverse overlap matrix
+!> \param ham Hamiltonian matrix
+!> \param densmat density matrix
+!> \param work workspace, same dimensions as the matrices
+!> \author Stepan Marek
+!> \date 12.2025
+! **************************************************************************************************
    SUBROUTINE propagator_commutator(commutator, inv_overlap, ham, densmat, work)
       COMPLEX(kind=dp), DIMENSION(:,:), INTENT(IN)       :: densmat, &
                                                             inv_overlap, &
