@@ -31,6 +31,7 @@ MODULE sbe
    USE sbe_types,                      ONLY: sbe_env_type, &
                                              init_sbe_env, &
                                              release_sbe_env
+   USE sbe_methods,                    ONLY: init_densmat
    USE cp_dbcsr_api,                   ONLY: dbcsr_p_type, &
                                              dbcsr_type, &
                                              dbcsr_create, &
@@ -124,10 +125,9 @@ CONTAINS
       CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index)
       CALL replicate_rs_matrices(matrix_h_kp, kpoints, sbe_env%ham_zero_rs, sbe_env%kpoints%cell_to_index)
 
-      ! DEBUG
-      sbe_env%densmat(1,1,1,1) = CMPLX(1.0,0.0,kind=dp)
-      sbe_env%densmat(1,2,1,1) = CMPLX(0.0,1.0,kind=dp)
-      sbe_env%densmat(1,1,2,1) = CMPLX(0.0,-1.0,kind=dp)
+      ! Initialization of the density matrix
+      CALL init_densmat(sbe_env%densmat, sbe_env%ham_zero_rs, sbe_env%overlap_rs, &
+                        sbe_env%ham_zero_kp, sbe_env%overlap_kp, sbe_env%kpoints, qs_env)
 
       ! Start the actual simulation
       DO i_step=sbe_env%sim_start, sbe_env%sim_nsteps
