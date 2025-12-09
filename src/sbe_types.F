@@ -68,11 +68,18 @@ MODULE sbe_types
                                                             sim_nsteps = -1, &
                                                             sim_start = 0, &
                                                             sim_start_orig = 0, &
-                                                            sim_step = 0
+                                                            sim_step = 0, &
+                                                            lwork
       INTEGER                                            :: propagator_method = sbe_propagator_rk4
       REAL(kind=dp)                                      :: sim_dt = 1.0e-3_dp / femtoseconds, &
-                                                            sim_time = 0.0_dp
-      REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: time_trace
+                                                            sim_time = 0.0_dp, &
+                                                            dephasing_time = 1.0_dp / femtoseconds
+      REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: time_trace, &
+                                                            eigvals, &
+                                                            eigrwork
+      COMPLEX(kind=dp), DIMENSION(:), ALLOCATABLE        :: eigwork
+      COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: damping
+      COMPLEX(kind=dp), DIMENSION(:,:,:), ALLOCATABLE    :: damping_work
    END TYPE sbe_env_type
 
    PUBLIC :: sbe_env_type, &
@@ -91,7 +98,8 @@ CONTAINS
       TYPE(force_env_type), POINTER                      :: force_env
       CHARACTER(len=*), PARAMETER                        :: routineN="init_sbe_env"
       INTEGER                                            :: handle, &
-                                                            i
+                                                            i, &
+                                                            info
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                    :: sab_all!, &
@@ -181,8 +189,25 @@ CONTAINS
       ALLOCATE (sbe_env%densmat_next(sbe_env%n_spin, sbe_env%n_ao, &
                 sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
       ! TODO : Different numbers for different propagators - we start with euler/RK4, which is determined by RK4
+      ! RK4 requires 4, Euler requires 1, damping requires ...
       ALLOCATE (sbe_env%densmat_work(4, sbe_env%n_ao, &
                 sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
+      ! Allocate space for eigenvalues
+      ALLOCATE (sbe_env%eigvals(sbe_env%n_ao), source=0.0_dp)
+      ! Allocate work for diagonalization routines
+      ! Get the lwork by workspace query
+      ALLOCATE (sbe_env%eigrwork(3*sbe_env%n_ao - 2), source=0.0_dp)
+      CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%ham_zero_kp(1, :, :, 1), &
+                 sbe_env%n_ao, sbe_env%overlap_kp(1, :, :, 1), sbe_env%n_ao, &
+                 sbe_env%eigvals, sbe_env%eigvals, -1, sbe_env%eigrwork, info)
+      IF (info /= 0) THEN
+         CPABORT("Could not get preffered size of LWORK for ZHEGV.")
+      END IF
+      sbe_env%lwork = int(sbe_env%eigvals(1))
+      ALLOCATE (sbe_env%eigwork(sbe_env%lwork), source=CMPLX(0.0, 0.0, kind=dp))
+      ! Allocate damping term - per spin+kpoint basis
+      ALLOCATE (sbe_env%damping(sbe_env%n_ao,sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%damping_work(2,sbe_env%n_ao,sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
 
       ! Get the other parameters for the simulation - time, number of steps etc
       CALL section_vals_val_get(force_env%root_section, "MOTION%MD%TIMESTEP", r_val=sbe_env%sim_dt)
@@ -193,6 +218,10 @@ CONTAINS
       ! Propagator method
       CALL section_vals_val_get(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%PROPAGATOR", &
                                 i_val=sbe_env%propagator_method)
+
+      ! TODO : Get the phenomenological dephasing time
+      CALL section_vals_val_get(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%DEPHASING_TIME", &
+                                r_val=sbe_env%dephasing_time)
 
       ! Allocate time
       ALLOCATE (sbe_env%time_trace(sbe_env%sim_nsteps - sbe_env%sim_start + 1), source=0.0_dp)
@@ -219,6 +248,12 @@ CONTAINS
       DEALLOCATE (sbe_env%time_trace)
       DEALLOCATE (sbe_env%densmat)
       DEALLOCATE (sbe_env%densmat_next)
+      DEALLOCATE (sbe_env%densmat_work)
+      DEALLOCATE (sbe_env%eigvals)
+      DEALLOCATE (sbe_env%eigwork)
+      DEALLOCATE (sbe_env%eigrwork)
+      DEALLOCATE (sbe_env%damping)
+      DEALLOCATE (sbe_env%damping_work)
 
       ! Finish by deallocating the pointer itself
       DEALLOCATE (sbe_env)

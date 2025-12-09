@@ -2186,6 +2186,15 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      ! Dephasing time
+      CALL keyword_create(keyword, __LOCATION__, name="DEPHASING_TIME", &
+              description="Dephasing $T_2$ time.", &
+              type_of_var=real_t, &
+              unit_str="fs", &
+              default_r_val=1.0_dp / femtoseconds)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
    END SUBROUTINE create_sbe_section
 
 ! **************************************************************************************************
