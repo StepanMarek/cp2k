@@ -20,6 +20,7 @@ MODULE sbe_methods
                                              get_mo_set
    USE kpoint_k_r_trafo_simple,        ONLY: rs_to_kp
    USE mathlib,                        ONLY: gemm_square
+   USE sbe_types,                      ONLY: sbe_env_type
 
 #include "./base/base_uses.f90"
 
@@ -29,7 +30,8 @@ MODULE sbe_methods
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'sbe_methods'
 
-   PUBLIC :: init_densmat
+   PUBLIC :: init_densmat, &
+             get_damping_term
 
 CONTAINS
 ! TODO : For GPU parallelism, probably need to write a kernel instead of a subroutine and
@@ -114,9 +116,12 @@ CONTAINS
                   ! IF (i == 1 .OR. i == 2) THEN
                   !    ham_copy(:, i) = 0.5_dp * ham_copy(:,i) + 0.5_dp * ham_copy(:,3-i)
                   ! ELSE
-                  !    ham_copy(:,i) = ham_copy(:,i) * occupations(i)
+                  !    ! ham_copy(:,i) = ham_copy(:,i) * occupations(i)
+                  !    ham_copy(:,i) = ham_copy(:,i) * REAL(occupations(i), kind=dp) / 2.0_dp
                   ! END IF
-                  ham_copy(:,i) = ham_copy(:,i) * occupations(i)
+                  ! Set up according to occupations (TODO : Handle double vs single occupied)
+                  ! ham_copy(:,i) = ham_copy(:,i) * occupations(i)
+                  ham_copy(:,i) = ham_copy(:,i) * REAL(occupations(i), kind=dp) / 2.0_dp
                END IF
             END DO
             ! Multiply to get the densmat
@@ -129,4 +134,56 @@ CONTAINS
       DEALLOCATE (work)
 
    END SUBROUTINE init_densmat
+
+   SUBROUTINE get_damping_term(sbe_env, damping_term, densmat, ispin, ikp)
+      TYPE(sbe_env_type), POINTER, INTENT(INOUT)            :: sbe_env
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(INOUT)       :: damping_term
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(IN)          :: densmat
+      INTEGER, INTENT(IN)                                   :: ispin, &
+                                                               ikp
+      CHARACTER(len=*), PARAMETER                           :: routineN="get_damping_term"
+      INTEGER                                               :: handle, &
+                                                               info, &
+                                                               i
+
+      CALL timeset(routineN, handle)
+
+      IF (sbe_env%dephasing_time == 0.0_dp) THEN
+         damping_term(:,:) = 0.0_dp
+         CALL timestop(handle)
+         RETURN
+      END IF
+
+      ! Copy ham_kp and s_kp, in order to not lose them after diagonalization
+      sbe_env%damping_work(1,:,:) = sbe_env%ham_zero_kp(ispin,:,:,ikp)
+      sbe_env%damping_work(2,:,:) = sbe_env%overlap_kp(1,:,:,ikp)
+      ! Allocate array for eigenvalues
+      ! Diagonalize
+      CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%damping_work(1,:,:), &
+                 sbe_env%n_ao, sbe_env%damping_work(2,:,:), sbe_env%n_ao, &
+                 sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
+      ! With the diagonals, can get rho_MO
+      CALL gemm_square(sbe_env%damping_work(1,:,:), 'C', &
+                       sbe_env%overlap_kp(1,:,:,ikp), 'N', &
+                       densmat, 'N', &
+                       sbe_env%damping_work(2,:,:))
+      CALL gemm_square(sbe_env%damping_work(2,:,:), 'N', &
+                       sbe_env%overlap_kp(1,:,:,ikp), 'N', &
+                       sbe_env%damping_work(1,:,:), 'N', &
+                       damping_term)
+      ! damping_term now contains rho^MO
+      ! Set the diagonal to zero - no damping on the diagonal
+      ! TODO : OMP Needed?
+      !$OMP PARALLEL DO DEFAULT(none) PRIVATE(i) SHARED(sbe_env,damping_term)
+      DO i=1,sbe_env%n_ao
+         damping_term(i,i) = 0.0_dp
+      END DO
+      !$OMP END PARALLEL DO
+
+      ! To finish the damping term, divide by T_2 time, multiply by correct sign
+      ! TODO : OMP?
+      damping_term(:,:) = -damping_term(:,:) / sbe_env%dephasing_time
+
+      CALL timestop(handle)
+   END SUBROUTINE
 END MODULE sbe_methods
