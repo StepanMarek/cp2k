@@ -31,7 +31,8 @@ MODULE sbe
    USE sbe_types,                      ONLY: sbe_env_type, &
                                              init_sbe_env, &
                                              release_sbe_env
-   USE sbe_methods,                    ONLY: init_densmat
+   USE sbe_methods,                    ONLY: init_densmat, &
+                                             get_damping_term
    USE cp_dbcsr_api,                   ONLY: dbcsr_p_type, &
                                              dbcsr_type, &
                                              dbcsr_create, &
@@ -159,15 +160,13 @@ CONTAINS
                              sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
             END DO
 
-            ! TODO : Propagate the density
-            DO j=1, sbe_env%n_spin
-               CALL propagate_density(sbe_env, sbe_env%densmat, sbe_env%densmat_next, info)
-            END DO
-            ! Info can report e.g. self-consistency failures
-            IF (info > 0) THEN
-               CALL cp_abort(__LOCATION__, "Failed to propagate the density matrix.")
-            END IF
          END DO
+         ! Propagate density
+         CALL propagate_density(sbe_env, sbe_env%densmat, sbe_env%densmat_next, info)
+         ! Info can report e.g. self-consistency failures
+         IF (info > 0) THEN
+            CALL cp_abort(__LOCATION__, "Failed to propagate the density matrix.")
+         END IF
          sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
          
          ! Outputs
@@ -191,48 +190,68 @@ CONTAINS
 !> \date 12.2025
 ! **************************************************************************************************
    SUBROUTINE propagate_density(sbe_env, densmat_old, densmat_new, info)
-      TYPE(sbe_env_type), POINTER, INTENT(IN)            :: sbe_env
+      TYPE(sbe_env_type), POINTER, INTENT(INOUT)         :: sbe_env
       COMPLEX(kind=dp), DIMENSION(:,:,:,:), INTENT(IN)   :: densmat_old
       COMPLEX(kind=dp), DIMENSION(:,:,:,:), INTENT(OUT)  :: densmat_new
       INTEGER, INTENT(OUT)                               :: info
       CHARACTER(len=*), PARAMETER                        :: routineN="propagate_density"
       INTEGER                                            :: handle, &
                                                             ispin, &
-                                                            ikp, &
-                                                            propagator_method
+                                                            ikp
 
       CALL timeset(routineN, handle)
 
-      ! DEBUG
-      propagator_method = 1
       ! TODO : Switch/select for different propagators
       DO ispin=1,sbe_env%n_spin
          DO ikp=1,sbe_env%local_nkp
             ! RK-4
             IF (sbe_env%propagator_method == sbe_propagator_rk4) THEN
+               ! k1 term
                CALL propagator_commutator(sbe_env%densmat_work(1,:,:,ikp), &
                                           sbe_env%inv_overlap_kp(1,:,:,ikp), &
                                           sbe_env%ham_zero_kp(ispin,:,:,ikp), &
                                           densmat_old(ispin,:,:,ikp), &
                                           densmat_new(ispin,:,:,ikp))
+               ! Add the non-commutator terms - damping and overlap derivative
+               CALL get_damping_term(sbe_env, sbe_env%damping, densmat_old(ispin,:,:,ikp), ispin, ikp)
+               sbe_env%densmat_work(1,:,:,ikp) = sbe_env%densmat_work(1,:,:,ikp) + sbe_env%damping(:,:)
+               ! k2 term
                CALL propagator_commutator(sbe_env%densmat_work(2,:,:,ikp), &
                                           sbe_env%inv_overlap_kp(1,:,:,ikp), &
                                           sbe_env%ham_zero_kp(ispin,:,:,ikp), &
                                           densmat_old(ispin,:,:,ikp) + &
                                           sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(1,:,:,ikp), &
                                           densmat_new(ispin,:,:,ikp))
+               ! Add the non-commutator terms - damping and overlap derivative
+               CALL get_damping_term(sbe_env, sbe_env%damping, &
+                                     densmat_old(ispin,:,:,ikp) + sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(1,:,:,ikp), &
+                                     ispin, ikp)
+               sbe_env%densmat_work(2,:,:,ikp) = sbe_env%densmat_work(2,:,:,ikp) + sbe_env%damping(:,:)
+               ! k3 term
                CALL propagator_commutator(sbe_env%densmat_work(3,:,:,ikp), &
                                           sbe_env%inv_overlap_kp(1,:,:,ikp), &
                                           sbe_env%ham_zero_kp(ispin,:,:,ikp), &
                                           densmat_old(ispin,:,:,ikp) + &
                                           sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(2,:,:,ikp), &
                                           densmat_new(ispin,:,:,ikp))
+               ! Add the non-commutator terms - damping and overlap derivative
+               CALL get_damping_term(sbe_env, sbe_env%damping, &
+                                     densmat_old(ispin,:,:,ikp) + sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(2,:,:,ikp), &
+                                     ispin, ikp)
+               sbe_env%densmat_work(3,:,:,ikp) = sbe_env%densmat_work(3,:,:,ikp) + sbe_env%damping(:,:)
+               ! k4 term
                CALL propagator_commutator(sbe_env%densmat_work(4,:,:,ikp), &
                                           sbe_env%inv_overlap_kp(1,:,:,ikp), &
                                           sbe_env%ham_zero_kp(ispin,:,:,ikp), &
                                           densmat_old(ispin,:,:,ikp) + &
                                           sbe_env%sim_dt * sbe_env%densmat_work(3,:,:,ikp), &
                                           densmat_new(ispin,:,:,ikp))
+               ! Add the non-commutator terms - damping and overlap derivative
+               CALL get_damping_term(sbe_env, sbe_env%damping, &
+                                     densmat_old(ispin,:,:,ikp) + sbe_env%sim_dt * sbe_env%densmat_work(3,:,:,ikp), &
+                                     ispin, ikp)
+               sbe_env%densmat_work(4,:,:,ikp) = sbe_env%densmat_work(4,:,:,ikp) + sbe_env%damping(:,:)
+               ! Final determination of next step
                densmat_new(ispin,:,:,ikp) = densmat_old(ispin,:,:,ikp) + &
                   sbe_env%sim_dt * (sbe_env%densmat_work(1,:,:,ikp) + 2.0_dp * sbe_env%densmat_work(2,:,:,ikp) + &
                      2.0_dp * sbe_env%densmat_work(3,:,:,ikp) + sbe_env%densmat_work(4,:,:,ikp)) / 6.0_dp
@@ -244,6 +263,9 @@ CONTAINS
                                           sbe_env%ham_zero_kp(ispin,:,:,ikp), &
                                           densmat_old(ispin,:,:,ikp), &
                                           densmat_new(ispin,:,:,ikp))
+               ! Add the non-commutator terms - damping and overlap derivative
+               CALL get_damping_term(sbe_env, sbe_env%damping, densmat_old(ispin,:,:,ikp), ispin, ikp)
+               sbe_env%densmat_work(1,:,:,ikp) = sbe_env%densmat_work(1,:,:,ikp) + sbe_env%damping(:,:)
                densmat_new(ispin,:,:,ikp) = densmat_old(ispin,:,:,ikp) + &
                   sbe_env%sim_dt * sbe_env%densmat_work(1,:,:,ikp)
                info = 0
