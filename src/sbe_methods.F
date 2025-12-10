@@ -38,109 +38,85 @@ CONTAINS
 !        handle the kpoint indices on same level as the matrix indices
 ! **************************************************************************************************
 !> \brief Populates the density matrix
-!> \param qs_env QS environment from the DFT calculation
+!> \param densmat Densitry matrix to be populated (specific spin and kpoint)
+!> \param ispin Spin index of the given density matrix (needed to retrieve relevant occupation)
+!> \param ham Kp hamiltonian
+!> \param smat Kp overlap
+!> \param qs_env QS environment, needed to get occupations
+!> \param sbe_env SBE environment, provides workspace (densmat_work(1:2,:,:))
 !> \author Stepan Marek
 !> \date 12.2025
 ! **************************************************************************************************
-   SUBROUTINE init_densmat(densmat, ham_rs, smat_rs, ham, smat, kpoints, qs_env)
-      COMPLEX(kind=dp), DIMENSION(:,:,:,:), INTENT(OUT)     :: densmat
-      REAL(kind=dp), DIMENSION(:,:,:,:), INTENT(IN)         :: ham_rs
-      REAL(kind=dp), DIMENSION(:,:,:,:), INTENT(IN)         :: smat_rs
-      COMPLEX(kind=dp), DIMENSION(:,:,:,:), INTENT(INOUT)   :: ham
-      COMPLEX(kind=dp), DIMENSION(:,:,:,:), INTENT(INOUT)   :: smat
-      TYPE(kpoint_type), POINTER, INTENT(IN)                :: kpoints
+   SUBROUTINE init_densmat(densmat, ispin, ham, smat, qs_env, sbe_env)
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(OUT)         :: densmat
+      INTEGER, INTENT(IN)                                   :: ispin
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(INOUT)       :: ham
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(INOUT)       :: smat
       TYPE(qs_environment_type), POINTER, INTENT(IN)        :: qs_env
+      TYPE(sbe_env_type), POINTER, INTENT(IN)               :: sbe_env
       TYPE(mo_set_type), DIMENSION(:), POINTER              :: mos
       REAL(kind=dp), DIMENSION(:), POINTER                  :: occupations
       INTEGER                                               :: n_ao, &
-                                                               ikp, &
-                                                               ispin, &
-                                                               info, &
-                                                               lwork, &
-                                                               mepos, &
                                                                i, &
-                                                               j, &
-                                                               j_local
-      REAL(kind=dp), DIMENSION(:), ALLOCATABLE              :: eigs
-      COMPLEX(kind=dp), DIMENSION(:), ALLOCATABLE           :: work
-      COMPLEX(kind=dp), DIMENSION(1)                        :: rec_work
-      REAL(kind=dp), DIMENSION(:), ALLOCATABLE              :: rwork
-      COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE         :: smat_copy, &
-                                                               ham_copy
-      ! Start by determining the kp matrices
-      mepos = kpoints%para_env%mepos + 1
-      DO j=kpoints%kp_dist(1,mepos), kpoints%kp_dist(2,mepos)
-         j_local = j - kpoints%kp_dist(1, mepos) + 1
-         CALL rs_to_kp(smat_rs(1,:,:,:), smat(1,:,:,j_local), kpoints%index_to_cell, kpoints%xkp(:, j))
-         DO i=1,SIZE(ham_rs, 1)
-            CALL rs_to_kp(ham_rs(i,:,:,:), ham(i,:,:,j_local), &
-                          kpoints%index_to_cell, kpoints%xkp(:,j))
-         END DO
-      END DO
+                                                               info
 
       CALL get_qs_env(qs_env, mos=mos)
 
+      ! TODO : Get rid of sbe_env dependence by providing workspaces?
       ! Diagonalize the hamiltonian with overlap to get the MOs
-      n_ao = SIZE(densmat, 2)
-      ALLOCATE (eigs(n_ao))
-      ALLOCATE (rwork(3*n_ao-2))
-      ALLOCATE (smat_copy(n_ao, n_ao))
-      ALLOCATE (ham_copy(n_ao, n_ao))
+      n_ao = sbe_env%n_ao
       ! TODO : Sanity checks
-      ! Query how much work is needed
-      CALL ZHEGV(1, 'V', 'U', n_ao, ham(1, :, :, 1), n_ao, smat(1, :, :, 1), n_ao, &
-         eigs, rec_work, -1, rwork, info)
-      lwork = INT(rec_work(1))
-      ALLOCATE (work(lwork))
-      DO ispin=1,SIZE(ham, 1)
-         ! Get the occupations from MOS
-         CALL get_mo_set(mos(ispin), occupation_numbers=occupations)
-         DO ikp=1,SIZE(ham, 4)
-            ! Copy input matrices
-            smat_copy(:,:) = smat(ispin, :, :, ikp)
-            ham_copy(:,:) = ham(ispin, :, :, ikp)
-            ! ZHEGV(itype, jobz, uplo, n, A, lda, B, ldb, &
-            !       w, work, lwork, rwork, info)
-            CALL ZHEGV(1, 'V', 'U', n_ao, ham_copy, n_ao, smat_copy, n_ao, &
-                       eigs, work, lwork, rwork, info)
-            ! ham_copy is now overwritten with eigenvectors
-            ! Density mat (in contravariant representation) is given as C * P_occ * C^H
-            ! Save copy of eigenvectors
-            smat_copy(:,:) = ham_copy(:,:)
-            ! Scale C by P_occ (P_occ * C)
-            DO i=1,n_ao
-               IF (i > SIZE(occupations)) THEN
-                  ham_copy(:,i) = 0.0_dp
-               ELSE
-                  ! ! DEBUG : Non-equilibrium density - transitions 1<->2
-                  ! IF (i == 1 .OR. i == 2) THEN
-                  !    ham_copy(:, i) = 0.5_dp * ham_copy(:,i) + 0.5_dp * ham_copy(:,3-i)
-                  ! ELSE
-                  !    ! ham_copy(:,i) = ham_copy(:,i) * occupations(i)
-                  !    ham_copy(:,i) = ham_copy(:,i) * REAL(occupations(i), kind=dp) / 2.0_dp
-                  ! END IF
-                  ! Set up according to occupations (TODO : Handle double vs single occupied)
-                  ! ham_copy(:,i) = ham_copy(:,i) * occupations(i)
-                  ham_copy(:,i) = ham_copy(:,i) * REAL(occupations(i), kind=dp) / 2.0_dp
-               END IF
-            END DO
-            ! Multiply to get the densmat
-            CALL gemm_square(ham_copy, 'N', smat_copy, 'C', densmat(ispin, :, :, ikp))
-         END DO
+      ! Get the occupations from MOS
+      CALL get_mo_set(mos(ispin), occupation_numbers=occupations)
+      ! Copy input matrices
+      sbe_env%densmat_work(1,:,:) = smat(:, :)
+      sbe_env%densmat_work(2,:,:) = ham(:, :)
+      CALL ZHEGV(1, 'V', 'U', n_ao, sbe_env%densmat_work(2,:,:), n_ao, &
+                 sbe_env%densmat_work(1,:,:), n_ao, &
+                 sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
+      ! ham_copy is now overwritten with eigenvectors
+      ! Density mat (in contravariant representation) is given as C * P_occ * C^H
+      ! Save copy of eigenvectors
+      sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(2,:,:)
+      ! Scale C by P_occ (P_occ * C)
+      DO i=1,n_ao
+         IF (i > SIZE(occupations)) THEN
+            sbe_env%densmat_work(2,:,i) = 0.0_dp
+         ELSE
+            ! ! DEBUG : Non-equilibrium density - transitions 1<->2
+            ! IF (i == 1 .OR. i == 2) THEN
+            !    sbe_env%densmat_work(2, :, i) = 0.5_dp * sbe_env%densmat_work(2,:,i) &
+            !                                    + 0.5_dp * sbe_env%densmat_work(2,:,3-i)
+            ! ELSE
+            !    ! ham_copy(:,i) = ham_copy(:,i) * occupations(i)
+            !    sbe_env%densmat_work(2,:,i) = sbe_env%densmat_work(2,:,i) * REAL(occupations(i), kind=dp) / 2.0_dp
+            ! END IF
+            ! Set up according to occupations (TODO : Handle double vs single occupied)
+            ! ham_copy(:,i) = ham_copy(:,i) * occupations(i)
+            sbe_env%densmat_work(2,:,i) = sbe_env%densmat_work(2,:,i) * REAL(occupations(i), kind=dp) / 2.0_dp
+         END IF
       END DO
-
-      DEALLOCATE (eigs)
-      DEALLOCATE (rwork)
-      DEALLOCATE (work)
+      ! Multiply to get the densmat
+      CALL gemm_square(sbe_env%densmat_work(2,:,:), 'N', &
+                       sbe_env%densmat_work(1,:,:), 'C', densmat(:, :))
 
    END SUBROUTINE init_densmat
 
-   SUBROUTINE get_damping_term(sbe_env, damping_term, densmat, ispin, ikp)
+! **************************************************************************************************
+!> \brief Determines the damping term using dephasing time, uses damping workspace
+!> \param sbe_env SBE environment with current kp zero field hamiltonian and overlap
+!> \param damping_term Complex matrix representing the damping term
+!> \param densmat Current kp density matrix, which is needed to construct the damping term
+!> \param ispin Spin index of the provided densmat (used to retreat other kpoint matrices)
+!> \param ikp Kpoint index of the provided densmat (used to retreat other kpoint matrices)
+!> \author Stepan Marek
+!> \date 12.2025
+! **************************************************************************************************
+   SUBROUTINE get_damping_term(sbe_env, damping_term, densmat, ispin)
       TYPE(sbe_env_type), POINTER, INTENT(INOUT)            :: sbe_env
       COMPLEX(kind=dp), DIMENSION(:,:), INTENT(INOUT)       :: damping_term
       COMPLEX(kind=dp), DIMENSION(:,:), INTENT(IN)          :: densmat
-      INTEGER, INTENT(IN)                                   :: ispin, &
-                                                               ikp
+      INTEGER, INTENT(IN)                                   :: ispin
       CHARACTER(len=*), PARAMETER                           :: routineN="get_damping_term"
       INTEGER                                               :: handle, &
                                                                info, &
@@ -155,8 +131,8 @@ CONTAINS
       END IF
 
       ! Copy ham_kp and s_kp, in order to not lose them after diagonalization
-      sbe_env%damping_work(1,:,:) = sbe_env%ham_zero_kp(ispin,:,:,ikp)
-      sbe_env%damping_work(2,:,:) = sbe_env%overlap_kp(1,:,:,ikp)
+      sbe_env%damping_work(1,:,:) = sbe_env%ham_zero_kp(ispin,:,:)
+      sbe_env%damping_work(2,:,:) = sbe_env%overlap_kp(:,:)
       ! Allocate array for eigenvalues
       ! Diagonalize
       CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%damping_work(1,:,:), &
@@ -164,11 +140,11 @@ CONTAINS
                  sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
       ! With the diagonals, can get rho_MO
       CALL gemm_square(sbe_env%damping_work(1,:,:), 'C', &
-                       sbe_env%overlap_kp(1,:,:,ikp), 'N', &
+                       sbe_env%overlap_kp(:,:), 'N', &
                        densmat, 'N', &
                        sbe_env%damping_work(2,:,:))
       CALL gemm_square(sbe_env%damping_work(2,:,:), 'N', &
-                       sbe_env%overlap_kp(1,:,:,ikp), 'N', &
+                       sbe_env%overlap_kp(:,:), 'N', &
                        sbe_env%damping_work(1,:,:), 'N', &
                        damping_term)
       ! damping_term now contains rho^MO
