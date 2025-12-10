@@ -51,16 +51,11 @@ MODULE sbe_types
       TYPE(kpoint_type), POINTER                         :: kpoints => NULL()
       INTEGER                                            :: local_nkp = 1, &
                                                             mepos = 0
-      ! dim 1 : spin/kind, dim 2 : rows, dim 3 : cols, dim 4 : kp
-      COMPLEX(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE  :: overlap_kp, &
-                                                            inv_overlap_kp, &
-                                                            ham_zero_kp
       REAL(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE     :: overlap_rs, &
-                                                            ham_zero_rs
+                                                            ham_zero_rs ! dim 1 : spins, dim 2 : rows, dim 3 : cols, dim 4 : images
       ! Propagation target - density matrix
-      COMPLEX(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE  :: densmat, &
-                                                            densmat_next, &
-                                                            densmat_work
+      COMPLEX(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE  :: densmat, &  ! dim 1 : spins, dim 2 : rows, dim 3 : cols, dim 4 : local kpoints
+                                                            densmat_next! dim 1 : spins, dim 2 : rows, dim 3 : cols, dim 4 : local kpoints
       INTEGER                                            :: n_ao = 0, &
                                                             n_images = 0, &
                                                             n_spin = 1, &
@@ -78,8 +73,12 @@ MODULE sbe_types
                                                             eigvals, &
                                                             eigrwork
       COMPLEX(kind=dp), DIMENSION(:), ALLOCATABLE        :: eigwork
-      COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: damping
-      COMPLEX(kind=dp), DIMENSION(:,:,:), ALLOCATABLE    :: damping_work
+      COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: damping, &
+                                                            overlap_kp, &
+                                                            inv_overlap_kp
+      COMPLEX(kind=dp), DIMENSION(:,:,:), ALLOCATABLE    :: damping_work, & ! dim 1 : work index, dim 2 : rows, dim 3 : cols
+                                                            densmat_work, & ! dim 1 : work index, dim 2 : rows, dim 3 : cols
+                                                            ham_zero_kp ! dim 1 : spins, dim 2 : rows, dim 3 : cols
    END TYPE sbe_env_type
 
    PUBLIC :: sbe_env_type, &
@@ -178,27 +177,23 @@ CONTAINS
 
       ! Allocate k-matrices
       ! TODO : Only allocate num_threads kpoints, to save memory?
-      ALLOCATE (sbe_env%overlap_kp(1, sbe_env%n_ao, &
-                sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
-      ALLOCATE (sbe_env%inv_overlap_kp(1, sbe_env%n_ao, &
-                sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
-      ALLOCATE (sbe_env%ham_zero_kp(sbe_env%n_spin, sbe_env%n_ao, &
-                sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%overlap_kp(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%inv_overlap_kp(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%ham_zero_kp(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%densmat(sbe_env%n_spin, sbe_env%n_ao, &
                 sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%densmat_next(sbe_env%n_spin, sbe_env%n_ao, &
                 sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
       ! TODO : Different numbers for different propagators - we start with euler/RK4, which is determined by RK4
       ! RK4 requires 4, Euler requires 1, damping requires ...
-      ALLOCATE (sbe_env%densmat_work(4, sbe_env%n_ao, &
-                sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%densmat_work(4, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ! Allocate space for eigenvalues
       ALLOCATE (sbe_env%eigvals(sbe_env%n_ao), source=0.0_dp)
       ! Allocate work for diagonalization routines
       ! Get the lwork by workspace query
       ALLOCATE (sbe_env%eigrwork(3*sbe_env%n_ao - 2), source=0.0_dp)
-      CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%ham_zero_kp(1, :, :, 1), &
-                 sbe_env%n_ao, sbe_env%overlap_kp(1, :, :, 1), sbe_env%n_ao, &
+      CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%ham_zero_kp(1, :, :), &
+                 sbe_env%n_ao, sbe_env%overlap_kp(:, :), sbe_env%n_ao, &
                  sbe_env%eigvals, sbe_env%eigvals, -1, sbe_env%eigrwork, info)
       IF (info /= 0) THEN
          CPABORT("Could not get preffered size of LWORK for ZHEGV.")
