@@ -32,7 +32,8 @@ MODULE sbe
                                              init_sbe_env, &
                                              release_sbe_env
    USE sbe_methods,                    ONLY: init_densmat, &
-                                             get_damping_term
+                                             get_damping_term, &
+                                             add_occ_numbers_kp
    USE cp_dbcsr_api,                   ONLY: dbcsr_p_type, &
                                              dbcsr_type, &
                                              dbcsr_create, &
@@ -128,14 +129,15 @@ CONTAINS
 
       ! Initialization of the density matrix
       ! Needs KS orbitals - need to get kpoint overlap and ham_zero
-      DO i = 1, sbe_env%local_nkp
+      DO i = sbe_env%kpoints%kp_dist(1, sbe_env%mepos), sbe_env%kpoints%kp_dist(2, sbe_env%mepos)
+         i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
          CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
                        sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
          DO j = 1, sbe_env%n_spin
             CALL rs_to_kp(sbe_env%ham_zero_rs(j,:,:,:), sbe_env%ham_zero_kp(j,:,:), &
                           sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
             ! Initialize the density
-            CALL init_densmat(sbe_env%densmat(j,:,:,i), j, &
+            CALL init_densmat(sbe_env%densmat(j,:,:,i_local), j, &
                               sbe_env%ham_zero_kp(j,:,:), sbe_env%overlap_kp, &
                               qs_env, sbe_env)
          END DO
@@ -149,6 +151,9 @@ CONTAINS
          ! Append to the trace
          sbe_env%time_trace(i_step - sbe_env%sim_start + 1) = sbe_env%sim_time
          ! TODO : Update the kpoints to set the field
+
+         ! Reset occupation numbers
+         sbe_env%occ_numbers(:,:) = 0.0_dp
 
          ! Iteration over local kpoints
          ! TODO : Run OMP over local kpoints or not?
@@ -171,9 +176,11 @@ CONTAINS
                CALL rs_to_kp(sbe_env%ham_zero_rs(j,:,:,:), sbe_env%ham_zero_kp(j,:,:), &
                              sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
                ! Actual propagation of the density rho(t) -> rho(t+dt)
-               CALL propagate_density(sbe_env, sbe_env%densmat(j,:,:,i), &
-                                      sbe_env%densmat_next(j,:,:,i), j, info)
+               CALL propagate_density(sbe_env, sbe_env%densmat(j,:,:,i_local), &
+                                      sbe_env%densmat_next(j,:,:,i_local), j, info)
             END DO
+            ! Per-kpoint operations - add occ_numbers
+            CALL add_occ_numbers_kp(sbe_env, sbe_env%occ_numbers, sbe_env%densmat_next(:,:,:,i_local), i_local)
 
          END DO
          ! Info can report e.g. self-consistency failures
@@ -182,11 +189,13 @@ CONTAINS
          END IF
          ! Set the current density matrix for the next step
          sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
+         ! Sum over the occupation numbers across all ranks
+         CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
          
          ! Outputs
          IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E12.3E3)") &
             " SBE| Timestep ", i_step, &
-            " time ", sbe_env%sim_time * femtoseconds, " re rho(1,1,1,1) ", REAL(sbe_env%densmat_next(1,1,1,1))
+            " time ", sbe_env%sim_time * femtoseconds, " n(1,2) ", sbe_env%occ_numbers(1,2)
       END DO
 
       ! Deallocations

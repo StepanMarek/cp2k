@@ -72,6 +72,7 @@ MODULE sbe_types
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: time_trace, &
                                                             eigvals, &
                                                             eigrwork
+      REAL(kind=dp), DIMENSION(:,:), ALLOCATABLE         :: occ_numbers
       COMPLEX(kind=dp), DIMENSION(:), ALLOCATABLE        :: eigwork
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: damping, &
                                                             overlap_kp, &
@@ -146,6 +147,8 @@ CONTAINS
                                           source=0.0_dp)
             ! The grid is accessible on all the ranks
             CALL compute_xkp(sbe_env%kpoints%xkp, 1, sbe_env%kpoints%nkp, sbe_env%kpoints%nkp_grid)
+            ALLOCATE (sbe_env%kpoints%wkp(sbe_env%kpoints%nkp))
+            sbe_env%kpoints%wkp(:) = 1.0_dp/REAL(sbe_env%kpoints%nkp, kind=dp)
          CASE ("GENERAL")
             ! Already calculated in read_kpoint_section
          CASE DEFAULT
@@ -204,6 +207,10 @@ CONTAINS
       ALLOCATE (sbe_env%damping(sbe_env%n_ao,sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%damping_work(2,sbe_env%n_ao,sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
 
+      ! Allocate occupation numbers
+      ! TODO : Only when output required?
+      ALLOCATE (sbe_env%occ_numbers(sbe_env%n_spin, sbe_env%n_ao), source=0.0_dp)
+
       ! Get the other parameters for the simulation - time, number of steps etc
       CALL section_vals_val_get(force_env%root_section, "MOTION%MD%TIMESTEP", r_val=sbe_env%sim_dt)
       CALL section_vals_val_get(force_env%root_section, "MOTION%MD%STEPS", i_val=sbe_env%sim_nsteps)
@@ -249,6 +256,7 @@ CONTAINS
       DEALLOCATE (sbe_env%eigrwork)
       DEALLOCATE (sbe_env%damping)
       DEALLOCATE (sbe_env%damping_work)
+      DEALLOCATE (sbe_env%occ_numbers)
 
       ! Finish by deallocating the pointer itself
       DEALLOCATE (sbe_env)
