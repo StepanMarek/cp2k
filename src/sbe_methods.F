@@ -31,7 +31,8 @@ MODULE sbe_methods
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'sbe_methods'
 
    PUBLIC :: init_densmat, &
-             get_damping_term
+             get_damping_term, &
+             add_occ_numbers_kp
 
 CONTAINS
 ! TODO : For GPU parallelism, probably need to write a kernel instead of a subroutine and
@@ -80,20 +81,28 @@ CONTAINS
       sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(2,:,:)
       ! Scale C by P_occ (P_occ * C)
       DO i=1,n_ao
+         ! ! DEBUG : Non-equilibrium density - transitions 1<->2
+         ! IF (i == 1 .OR. i == 2) THEN
+         !    sbe_env%densmat_work(2, :, i) = 0.5_dp * sbe_env%densmat_work(1,:,i) &
+         !                                    + 0.5_dp * sbe_env%densmat_work(1,:,3-i)
+         ! ELSE
+         !    IF (i > SIZE(occupations)) THEN
+         !       sbe_env%densmat_work(2,:,i) = 0.0_dp
+         !    ELSE
+         !       ! Set up according to occupations
+         !       ! Scales occupations so that the density is still idempotent even in closed shell case
+         !       sbe_env%densmat_work(2,:,i) = sbe_env%densmat_work(1,:,i) * &
+         !          REAL(occupations(i), kind=dp) / REAL(sbe_env%n_spin, kind=dp)
+         !    END IF
+         ! END IF
          IF (i > SIZE(occupations)) THEN
             sbe_env%densmat_work(2,:,i) = 0.0_dp
          ELSE
-            ! ! DEBUG : Non-equilibrium density - transitions 1<->2
-            ! IF (i == 1 .OR. i == 2) THEN
-            !    sbe_env%densmat_work(2, :, i) = 0.5_dp * sbe_env%densmat_work(2,:,i) &
-            !                                    + 0.5_dp * sbe_env%densmat_work(2,:,3-i)
-            ! ELSE
-            !    ! ham_copy(:,i) = ham_copy(:,i) * occupations(i)
-            !    sbe_env%densmat_work(2,:,i) = sbe_env%densmat_work(2,:,i) * REAL(occupations(i), kind=dp) / 2.0_dp
-            ! END IF
-            ! Set up according to occupations (TODO : Handle double vs single occupied)
-            ! ham_copy(:,i) = ham_copy(:,i) * occupations(i)
-            sbe_env%densmat_work(2,:,i) = sbe_env%densmat_work(2,:,i) * REAL(occupations(i), kind=dp) / 2.0_dp
+            ! Set up according to occupations
+            ! Scales occupations so that the density is still idempotent even in closed shell case
+            ! TODO : Can n_spin be different than 1 or 2?
+            sbe_env%densmat_work(2,:,i) = sbe_env%densmat_work(1,:,i) * &
+               REAL(occupations(i), kind=dp) / REAL(3-sbe_env%n_spin, kind=dp)
          END IF
       END DO
       ! Multiply to get the densmat
@@ -161,5 +170,37 @@ CONTAINS
       damping_term(:,:) = -damping_term(:,:) / sbe_env%dephasing_time
 
       CALL timestop(handle)
+   END SUBROUTINE
+! **************************************************************************************************
+!> \brief Adds to the KS occupation number, for the given kpoint
+!> \author Stepan Marek
+!> \date 12.2025
+! **************************************************************************************************
+   SUBROUTINE add_occ_numbers_kp(sbe_env, occ_numbers, densmat, ikp)
+      TYPE(sbe_env_type), POINTER, INTENT(IN)               :: sbe_env
+      REAL(kind=dp), DIMENSION(:,:)                         :: occ_numbers ! dim 1 : spin, dim 2 : band
+      COMPLEX(kind=dp), DIMENSION(:,:,:)                    :: densmat ! dim 1 : spin, dim 2 : rows, dim 3 : cols
+      INTEGER                                               :: ikp
+      INTEGER                                               :: n, info, ispin
+      ! For current local kpoint, get the transformation from AO to get n_m(k)
+      ! Get the molecular orbitals
+      DO ispin=1, sbe_env%n_spin
+         sbe_env%densmat_work(1,:,:) = sbe_env%ham_zero_kp(ispin,:,:)
+         sbe_env%densmat_work(2,:,:) = sbe_env%overlap_kp(:,:)
+         CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(1,:,:), &
+                    sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
+                    sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
+         ! With molecular orbitals in densmat_work(1,:,:), we can do the product
+         CALL gemm_square(sbe_env%densmat_work(1,:,:), 'C', sbe_env%overlap_kp, 'N', &
+                          densmat(ispin,:,:), 'N', sbe_env%densmat_work(2,:,:))
+         CALL gemm_square(sbe_env%densmat_work(2,:,:), 'N', sbe_env%overlap_kp, 'N', &
+                          sbe_env%densmat_work(1,:,:), 'N', sbe_env%densmat_work(3,:,:))
+         ! densmat_work(3) now contains occupations on the diagonal
+         DO n=1,SIZE(occ_numbers)
+            ! TODO : Are occupation numbers always necceserily real?
+            occ_numbers(ispin,n) = occ_numbers(ispin,n) + &
+               REAL(sbe_env%densmat_work(3,n,n), kind=dp) * sbe_env%kpoints%wkp(ikp)
+         END DO
+      END DO
    END SUBROUTINE
 END MODULE sbe_methods
