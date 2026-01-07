@@ -30,7 +30,8 @@ MODULE sbe
    USE sbe_utils,                      ONLY: print_sbe_header_info
    USE sbe_types,                      ONLY: sbe_env_type, &
                                              init_sbe_env, &
-                                             release_sbe_env
+                                             release_sbe_env, &
+                                             get_moments_rs_dbcsr
    USE sbe_methods,                    ONLY: init_densmat, &
                                              get_damping_term, &
                                              add_occ_numbers_kp
@@ -38,6 +39,7 @@ MODULE sbe
                                              dbcsr_type, &
                                              dbcsr_create, &
                                              dbcsr_release, &
+                                             dbcsr_release_p, &
                                              dbcsr_desymmetrize, &
                                              dbcsr_get_info
    USE cp_dbcsr_contrib,               ONLY: dbcsr_print
@@ -79,7 +81,7 @@ CONTAINS
                                                             info, &
                                                             handle
       ! REAL(kind=dp), DIMENSION(3)                        :: single_k
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s_kp, matrix_h_kp
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s_kp, matrix_h_kp, moments_rs_img
       ! TYPE(dbcsr_type)                                   :: s_k, sc_k
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                    :: sab_nl
@@ -127,6 +129,27 @@ CONTAINS
       CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index)
       CALL replicate_rs_matrices(matrix_h_kp, kpoints, sbe_env%ham_zero_rs, sbe_env%kpoints%cell_to_index)
 
+      ! Generate the moments in RS
+      NULLIFY (moments_rs_img)
+      ALLOCATE (moments_rs_img(3, sbe_env%n_images))
+      CALL get_moments_rs_dbcsr(qs_env, moments_rs_img)
+      ! ! DEBUG
+      ! CALL dbcsr_print(moments_rs_img(1,2)%matrix)
+      CALL replicate_rs_matrices(moments_rs_img, sbe_env%kpoints, &
+                                 sbe_env%moments_rs, sbe_env%kpoints%cell_to_index)
+      ! ! DEBUG
+      ! DO i=1, sbe_env%n_ao
+      !    DO j=1, sbe_env%n_ao
+      !       PRINT *, i, j, sbe_env%moments_rs(1, i, j, 2)
+      !    END DO
+      ! END DO
+      DO i=1,3
+         DO j=1, sbe_env%n_images
+            CALL dbcsr_release_p(moments_rs_img(i, j)%matrix)
+         END DO
+      END DO
+      DEALLOCATE (moments_rs_img)
+
       ! Initialization of the density matrix
       ! Needs KS orbitals - need to get kpoint overlap and ham_zero
       DO i = sbe_env%kpoints%kp_dist(1, sbe_env%mepos), sbe_env%kpoints%kp_dist(2, sbe_env%mepos)
@@ -142,6 +165,8 @@ CONTAINS
                               qs_env, sbe_env)
          END DO
       END DO
+
+      ! TODO : Initialization of moments - for the 
 
       ! Start the actual simulation
       DO i_step=sbe_env%sim_start, sbe_env%sim_nsteps
