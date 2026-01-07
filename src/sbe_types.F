@@ -30,6 +30,8 @@ MODULE sbe_types
                                   section_vals_get_subs_vals, &
                                   section_vals_val_get
    USE post_scf_bandstructure_utils, ONLY: compute_xkp
+   USE qs_moments, ONLY: build_local_moment_matrix_rs_img
+   USE moments_utils, ONLY: get_reference_point
    USE cp_log_handling, ONLY: cp_logger_get_default_io_unit, &
                               cp_logger_type, &
                               cp_get_default_logger
@@ -52,7 +54,8 @@ MODULE sbe_types
       INTEGER                                            :: local_nkp = 1, &
                                                             mepos = 0
       REAL(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE     :: overlap_rs, &
-                                                            ham_zero_rs ! dim 1 : spins, dim 2 : rows, dim 3 : cols, dim 4 : images
+                                                            ham_zero_rs, &! dim 1 : spins, dim 2 : rows, dim 3 : cols, dim 4 : images
+                                                            moments_rs
       ! Propagation target - density matrix
       COMPLEX(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE  :: densmat, &  ! dim 1 : spins, dim 2 : rows, dim 3 : cols, dim 4 : local kpoints
                                                             densmat_next! dim 1 : spins, dim 2 : rows, dim 3 : cols, dim 4 : local kpoints
@@ -84,7 +87,8 @@ MODULE sbe_types
 
    PUBLIC :: sbe_env_type, &
              init_sbe_env, &
-             release_sbe_env
+             release_sbe_env, &
+             get_moments_rs_dbcsr
 CONTAINS
 ! **************************************************************************************************
 !> \brief Initializes the sbe_env - allocates objects and retrieves parameters from DFT
@@ -177,6 +181,7 @@ CONTAINS
       sbe_env%n_spin = SIZE(matrix_ks_kp, 1)
       ALLOCATE (sbe_env%overlap_rs(1, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
       ALLOCATE (sbe_env%ham_zero_rs(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
+      ALLOCATE (sbe_env%moments_rs(3, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
 
       ! Allocate k-matrices
       ! TODO : Only allocate num_threads kpoints, to save memory?
@@ -247,6 +252,7 @@ CONTAINS
       DEALLOCATE (sbe_env%inv_overlap_kp)
       DEALLOCATE (sbe_env%ham_zero_rs)
       DEALLOCATE (sbe_env%ham_zero_kp)
+      DEALLOCATE (sbe_env%moments_rs)
       DEALLOCATE (sbe_env%time_trace)
       DEALLOCATE (sbe_env%densmat)
       DEALLOCATE (sbe_env%densmat_next)
@@ -317,4 +323,40 @@ CONTAINS
       ! TODO : Put io task on the rank which has fewer kpoints, if such task exists
       DEALLOCATE (nkp_loc)
    END SUBROUTINE sbe_create_kpoint_dist
+! **************************************************************************************************
+!> \brief Calculates the AO atomic moments for images present in qs_env
+!> \note Moment reference point is taken from REAL_TIME_PROPAGATION%PRINT%MOMENTS
+!> \param qs_env Quickstep entry point
+!> \param moments The resulting AO image matrices
+!> \author Stepan Marek
+!> \date 01.2026
+! **************************************************************************************************
+   SUBROUTINE get_moments_rs_dbcsr(qs_env, moments)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: moments
+      CHARACTER(len=*), PARAMETER                        :: routineN="get_moments_rs_dbcsr"
+      INTEGER                                            :: handle, &
+                                                            ref_type
+      REAL(kind=dp), DIMENSION(3)                        :: ref_point
+      REAL(kind=dp), DIMENSION(:), POINTER               :: ref_custom
+      TYPE(section_vals_type), POINTER                   :: input
+
+      CALL timeset(routineN, handle)
+
+      ! Get the input
+      CALL get_qs_env(qs_env, input=input)
+
+      CALL section_vals_val_get(input, "DFT%REAL_TIME_PROPAGATION%PRINT%MOMENTS%REFERENCE", &
+                                      i_val=ref_type)
+      CALL section_vals_val_get(input, "DFT%REAL_TIME_PROPAGATION%PRINT%MOMENTS%REFERENCE_POINT", &
+                                      r_vals=ref_custom)
+
+      ! Get the custom reference point from the input
+      CALL get_reference_point(ref_point, qs_env=qs_env, reference=ref_type, ref_point=ref_custom)
+
+      ! With the given reference point, call the moment function
+      CALL build_local_moment_matrix_rs_img(qs_env, moments, ref_point)
+
+      CALL timestop(handle)
+   END SUBROUTINE get_moments_rs_dbcsr
 END MODULE sbe_types
