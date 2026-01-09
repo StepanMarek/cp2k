@@ -53,6 +53,7 @@ MODULE sbe_types
       TYPE(kpoint_type), POINTER                         :: kpoints => NULL()
       INTEGER                                            :: local_nkp = 1, &
                                                             mepos = 0
+      TYPE(dft_control_type), POINTER                    :: dft_control => NULL()
       REAL(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE     :: overlap_rs, &
                                                             ham_zero_rs, &! dim 1 : spins, dim 2 : rows, dim 3 : cols, dim 4 : images
                                                             moments_rs
@@ -72,6 +73,9 @@ MODULE sbe_types
       REAL(kind=dp)                                      :: sim_dt = 1.0e-3_dp / femtoseconds, &
                                                             sim_time = 0.0_dp, &
                                                             dephasing_time = 1.0_dp / femtoseconds
+      REAL(kind=dp), DIMENSION(3)                        :: field = 0.0_dp, &
+                                                            vector_potential = 0.0_dp
+      REAL(kind=dp), DIMENSION(3,3)                      :: hmat = 0.0_dp
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: time_trace, &
                                                             eigvals, &
                                                             eigrwork
@@ -79,10 +83,14 @@ MODULE sbe_types
       COMPLEX(kind=dp), DIMENSION(:), ALLOCATABLE        :: eigwork
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: damping, &
                                                             overlap_kp, &
-                                                            inv_overlap_kp
+                                                            inv_overlap_kp, &
+                                                            grad_work ! dim 1 : rows, dim 2 : cols
       COMPLEX(kind=dp), DIMENSION(:,:,:), ALLOCATABLE    :: damping_work, & ! dim 1 : work index, dim 2 : rows, dim 3 : cols
                                                             densmat_work, & ! dim 1 : work index, dim 2 : rows, dim 3 : cols
-                                                            ham_zero_kp ! dim 1 : spins, dim 2 : rows, dim 3 : cols
+                                                            ham_zero_kp, & ! dim 1 : spins, dim 2 : rows, dim 3 : cols
+                                                            ham_kp, & ! dim 1 : spins, dim 2 : rows, dim 3 : cols
+                                                            moments_kp, & ! dim 1 : direction, dim 2 : rows, dim 3 : cols
+                                                            overlap_grad ! dim 1 : direction, dim 2 : rows, dim 3 : cols
    END TYPE sbe_env_type
 
    PUBLIC :: sbe_env_type, &
@@ -130,6 +138,10 @@ CONTAINS
       ! Start with kpoints allocation
       CALL force_env_get(force_env, qs_env=qs_env, input=force_input)
       CALL get_qs_env(qs_env, sab_all=sab_all, para_env=para_env, dft_control=dft_control, cell=cell)
+      ! Save dft_control pointer - necessary for make_field during propagation
+      sbe_env%dft_control => dft_control
+      ! Save cell - need for k-gradient construction during propagation
+      sbe_env%hmat = cell%hmat
 
       CALL kpoint_create(sbe_env%kpoints)
       CALL kpoint_init_cell_index(sbe_env%kpoints, sab_all, para_env, dft_control)
@@ -184,10 +196,13 @@ CONTAINS
       ALLOCATE (sbe_env%moments_rs(3, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
 
       ! Allocate k-matrices
-      ! TODO : Only allocate num_threads kpoints, to save memory?
       ALLOCATE (sbe_env%overlap_kp(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%inv_overlap_kp(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%ham_zero_kp(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%ham_kp(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%moments_kp(3, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%overlap_grad(3, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+      ! Allocate density matrix
       ALLOCATE (sbe_env%densmat(sbe_env%n_spin, sbe_env%n_ao, &
                 sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%densmat_next(sbe_env%n_spin, sbe_env%n_ao, &
@@ -211,6 +226,9 @@ CONTAINS
       ! Allocate damping term - per spin+kpoint basis
       ALLOCATE (sbe_env%damping(sbe_env%n_ao,sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%damping_work(2,sbe_env%n_ao,sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+
+      ! Workspace for the overlap gradient term (need to accumulate before 3-multiplications to get the result
+      ALLOCATE (sbe_env%grad_work(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
 
       ! Allocate occupation numbers
       ! TODO : Only when output required?
@@ -247,21 +265,35 @@ CONTAINS
       CPASSERT(ASSOCIATED(sbe_env))
 
       CALL kpoint_release(sbe_env%kpoints)
+
       DEALLOCATE (sbe_env%overlap_rs)
       DEALLOCATE (sbe_env%overlap_kp)
       DEALLOCATE (sbe_env%inv_overlap_kp)
+      DEALLOCATE (sbe_env%overlap_grad)
+
       DEALLOCATE (sbe_env%ham_zero_rs)
       DEALLOCATE (sbe_env%ham_zero_kp)
+      DEALLOCATE (sbe_env%ham_kp)
+
       DEALLOCATE (sbe_env%moments_rs)
+      DEALLOCATE (sbe_env%moments_kp)
+
       DEALLOCATE (sbe_env%time_trace)
+
       DEALLOCATE (sbe_env%densmat)
       DEALLOCATE (sbe_env%densmat_next)
+
       DEALLOCATE (sbe_env%densmat_work)
+
       DEALLOCATE (sbe_env%eigvals)
       DEALLOCATE (sbe_env%eigwork)
       DEALLOCATE (sbe_env%eigrwork)
+
       DEALLOCATE (sbe_env%damping)
       DEALLOCATE (sbe_env%damping_work)
+
+      DEALLOCATE (sbe_env%grad_work)
+
       DEALLOCATE (sbe_env%occ_numbers)
 
       ! Finish by deallocating the pointer itself

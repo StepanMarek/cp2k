@@ -12,6 +12,7 @@
 MODULE sbe
    USE input_constants,                ONLY: rtp_method_sbe, &
                                              sbe_propagator_rk4
+   USE efield_utils,                   ONLY: make_field
    USE force_env_types,                ONLY: force_env_type, &
                                              force_env_get
    USE force_env_methods,              ONLY: force_env_calc_energy_force
@@ -130,6 +131,7 @@ CONTAINS
       CALL replicate_rs_matrices(matrix_h_kp, kpoints, sbe_env%ham_zero_rs, sbe_env%kpoints%cell_to_index)
 
       ! Generate the moments in RS
+      ! TODO : Check dependence on reference point, also in RTBSE
       NULLIFY (moments_rs_img)
       ALLOCATE (moments_rs_img(3, sbe_env%n_images))
       CALL get_moments_rs_dbcsr(qs_env, moments_rs_img)
@@ -153,13 +155,23 @@ CONTAINS
       ! Initialization of the density matrix
       ! Needs KS orbitals - need to get kpoint overlap and ham_zero
       DO i = sbe_env%kpoints%kp_dist(1, sbe_env%mepos), sbe_env%kpoints%kp_dist(2, sbe_env%mepos)
+         ! Explicitly set the fields to zero
+         ! TODO : Delta kick application by constant vector only?
+         sbe_env%field(:) = 0.0_dp
+         sbe_env%vector_potential(:) = 0.0_dp
+         CALL update_kp_matrices(sbe_env, i)
          i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
-         CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
-                       sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
+         ! CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
+         !               sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
+         ! DO j = 1, sbe_env%n_spin
+         !    CALL rs_to_kp(sbe_env%ham_zero_rs(j,:,:,:), sbe_env%ham_zero_kp(j,:,:), &
+         !                  sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
+         !    ! Initialize the density
+         !    CALL init_densmat(sbe_env%densmat(j,:,:,i_local), j, &
+         !                      sbe_env%ham_zero_kp(j,:,:), sbe_env%overlap_kp, &
+         !                      qs_env, sbe_env)
+         ! END DO
          DO j = 1, sbe_env%n_spin
-            CALL rs_to_kp(sbe_env%ham_zero_rs(j,:,:,:), sbe_env%ham_zero_kp(j,:,:), &
-                          sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
-            ! Initialize the density
             CALL init_densmat(sbe_env%densmat(j,:,:,i_local), j, &
                               sbe_env%ham_zero_kp(j,:,:), sbe_env%overlap_kp, &
                               qs_env, sbe_env)
@@ -184,26 +196,17 @@ CONTAINS
          ! TODO : Run OMP over local kpoints or not?
          DO i=sbe_env%kpoints%kp_dist(1,sbe_env%mepos), sbe_env%kpoints%kp_dist(2, sbe_env%mepos)
             i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
-            ! TODO : Recalculate the k-matrices at new kpoints
+            ! Recalculate the k-matrices at new kpoints
+            ! TODO : Indicate/change how the field is propagated
+            ! TODO : Maybe implement field current and field next?
             ! TODO : For fields that are no longer changing, stop the update to speed up the simulation? Maybe via metric change?
-            ! Overlap
-            CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
-                          sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
-            ! Inverse overlap
-            sbe_env%inv_overlap_kp(:,:) = sbe_env%overlap_kp(:,:)
-            CALL invcmat(sbe_env%inv_overlap_kp, info)
-            IF (info /= 0) THEN
-               CALL cp_abort(__LOCATION__, "Overlap matrix inverse failed.")
-            END IF
-            ! Spin-dependent operators
+            CALL update_kp_matrices(sbe_env, i)
+            ! Actual propagation of the density rho(t) -> rho(t+dt)
             DO j=1,sbe_env%n_spin
-               ! Hamiltonian
-               CALL rs_to_kp(sbe_env%ham_zero_rs(j,:,:,:), sbe_env%ham_zero_kp(j,:,:), &
-                             sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
-               ! Actual propagation of the density rho(t) -> rho(t+dt)
                CALL propagate_density(sbe_env, sbe_env%densmat(j,:,:,i_local), &
-                                      sbe_env%densmat_next(j,:,:,i_local), j, info)
+                                      sbe_env%densmat_next(j,:,:,i_local), j, i, info)
             END DO
+            ! Export observables
             ! Per-kpoint operations - add occ_numbers
             CALL add_occ_numbers_kp(sbe_env, sbe_env%occ_numbers, sbe_env%densmat_next(:,:,:,i_local), i_local)
 
@@ -212,15 +215,15 @@ CONTAINS
          IF (info > 0) THEN
             CALL cp_abort(__LOCATION__, "Failed to propagate the density matrix.")
          END IF
-         ! Set the current density matrix for the next step
-         sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
+
+         ! Outputs
          ! Sum over the occupation numbers across all ranks
          CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
-         
-         ! Outputs
          IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E12.3E3)") &
             " SBE| Timestep ", i_step, &
             " time ", sbe_env%sim_time * femtoseconds, " n(1,2) ", sbe_env%occ_numbers(1,2)
+         ! Set the current density matrix for the next step
+         sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
       END DO
 
       ! Deallocations
@@ -231,6 +234,7 @@ CONTAINS
 ! **************************************************************************************************
 !> \brief Propagates from one density to other, switch between different propagators here
 !> \note Uses the previously calculated overlap, inverse overlap and hamiltonian in kspace
+!> \note Field/vector potential calculation done in here, since there is explicit t dependence
 !> \param sbe_env SBE environment
 !> \param densmat_old Explicit old density
 !> \param densmat_new Explicit new density
@@ -238,11 +242,11 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 12.2025
 ! **************************************************************************************************
-   SUBROUTINE propagate_density(sbe_env, densmat_old, densmat_new, ispin, info)
+   SUBROUTINE propagate_density(sbe_env, densmat_old, densmat_new, ispin, ikp, info)
       TYPE(sbe_env_type), POINTER, INTENT(INOUT)         :: sbe_env
       COMPLEX(kind=dp), DIMENSION(:,:), INTENT(IN)       :: densmat_old
       COMPLEX(kind=dp), DIMENSION(:,:), INTENT(OUT)      :: densmat_new
-      INTEGER, INTENT(IN)                                :: ispin
+      INTEGER, INTENT(IN)                                :: ispin, ikp
       INTEGER, INTENT(OUT)                               :: info
       CHARACTER(len=*), PARAMETER                        :: routineN="propagate_density"
       INTEGER                                            :: handle
@@ -253,18 +257,31 @@ CONTAINS
       ! RK-4
       IF (sbe_env%propagator_method == sbe_propagator_rk4) THEN
          ! k1 term
+         ! Update the field, current time
+         CALL make_field(sbe_env%dft_control, sbe_env%field, sbe_env%sim_step, sbe_env%sim_time)
+         ! Vector potential is always set from before (previous timestep or delta kick or zero)
          CALL propagator_commutator(sbe_env%densmat_work(1,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
-                                    sbe_env%ham_zero_kp(ispin,:,:), &
+                                    sbe_env%ham_kp(ispin,:,:), &
                                     densmat_old(:,:), &
                                     densmat_new(:,:))
          ! Add the non-commutator terms - damping and overlap derivative
          CALL get_damping_term(sbe_env, sbe_env%damping, densmat_old(:,:), ispin)
          sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
+         ! TODO : k2 and k3 terms are evaluated at t+Delta t/2 - should recalculate h, S, S^(-1) and field
          ! k2 term
+         ! Update the field, mid-point
+         ! TODO : Sim-step interpolation?
+         CALL make_field(sbe_env%dft_control, sbe_env%field, sbe_env%sim_step, &
+                         sbe_env%sim_time + 0.5_dp*sbe_env%sim_dt)
+         ! Add to vector potential
+         sbe_env%vector_potential(:) = sbe_env%vector_potential(:) + &
+                                       0.5_dp*sbe_env%sim_dt*sbe_env%field(:)
+         ! Since vector potential changes, update kp matrices
+         CALL update_kp_matrices(sbe_env, ikp)
          CALL propagator_commutator(sbe_env%densmat_work(2,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
-                                    sbe_env%ham_zero_kp(ispin,:,:), &
+                                    sbe_env%ham_kp(ispin,:,:), &
                                     densmat_old(:,:) + &
                                     sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(1,:,:), &
                                     densmat_new(:,:))
@@ -276,7 +293,7 @@ CONTAINS
          ! k3 term
          CALL propagator_commutator(sbe_env%densmat_work(3,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
-                                    sbe_env%ham_zero_kp(ispin,:,:), &
+                                    sbe_env%ham_kp(ispin,:,:), &
                                     densmat_old(:,:) + &
                                     sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(2,:,:), &
                                     densmat_new(:,:))
@@ -285,10 +302,20 @@ CONTAINS
                                densmat_old(:,:) + sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(2,:,:), &
                                ispin)
          sbe_env%densmat_work(3,:,:) = sbe_env%densmat_work(3,:,:) + sbe_env%damping(:,:)
+         ! TODO : k4 term is evaluated at t+Delta t - should recalculate h, S, S^(-1) and field
          ! k4 term
+         ! Update the field, final time
+         CALL make_field(sbe_env%dft_control, sbe_env%field, sbe_env%sim_step + 1, &
+                         sbe_env%sim_time + sbe_env%sim_dt)
+         ! Add to vector potential (stored for midpoint, so only half of timestep added)
+         sbe_env%vector_potential(:) = sbe_env%vector_potential(:) + &
+                                       0.5_dp*sbe_env%sim_dt*sbe_env%field(:)
+         ! Since vector potential changes, update kp matrices
+         ! TODO : Only update a given spin and ikp
+         CALL update_kp_matrices(sbe_env, ikp)
          CALL propagator_commutator(sbe_env%densmat_work(4,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
-                                    sbe_env%ham_zero_kp(ispin,:,:), &
+                                    sbe_env%ham_kp(ispin,:,:), &
                                     densmat_old(:,:) + &
                                     sbe_env%sim_dt * sbe_env%densmat_work(3,:,:), &
                                     densmat_new(:,:))
@@ -303,15 +330,30 @@ CONTAINS
                2.0_dp * sbe_env%densmat_work(3,:,:) + sbe_env%densmat_work(4,:,:)) / 6.0_dp
          info = 0
       ELSE
+         ! Update the field, current time
+         CALL make_field(sbe_env%dft_control, sbe_env%field, sbe_env%sim_step, sbe_env%sim_time)
+         ! Update the kp matrices to current time
+         CALL update_kp_matrices(sbe_env, ikp)
          ! Default to forwards Euler
          CALL propagator_commutator(sbe_env%densmat_work(1,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
-                                    sbe_env%ham_zero_kp(ispin,:,:), &
+                                    sbe_env%ham_kp(ispin,:,:), &
                                     densmat_old(:,:), &
                                     densmat_new(:,:))
          ! Add the non-commutator terms - damping and overlap derivative
          CALL get_damping_term(sbe_env, sbe_env%damping, densmat_old(:,:), ispin)
          sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
+         ! Calculate the gradient term (-q)/hbar S^(-1) (E(t) . nabla(S)) rho
+         ! E(t) . nabla(S)
+         sbe_env%grad_work(:,:) = sbe_env%field(1) * sbe_env%overlap_grad(1,:,:) + &
+                                  sbe_env%field(2) * sbe_env%overlap_grad(2,:,:) + &
+                                  sbe_env%field(3) * sbe_env%overlap_grad(3,:,:)
+         ! Use densmat_new as additional workspace
+         ! S^(-1) (E(t) . nabla(S)) rho
+         CALL gemm_square(sbe_env%inv_overlap_kp, 'N', sbe_env%grad_work, 'N', &
+                          densmat_old, 'N', densmat_new)
+         ! Add this term to the derivative (extra minus sign due to charge of electrons)
+         sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + densmat_new(:,:)
          densmat_new(:,:) = densmat_old(:,:) + &
             sbe_env%sim_dt * sbe_env%densmat_work(1,:,:)
          info = 0
@@ -343,4 +385,55 @@ CONTAINS
 
       commutator(:,:) = CMPLX(0.0, -1.0, kind=dp) * (work(:,:) - commutator(:,:))
    END SUBROUTINE propagator_commutator
+! **************************************************************************************************
+!> \brief Updates kpoint matrices based on the current value of field and vector potential
+! **************************************************************************************************
+   SUBROUTINE update_kp_matrices(sbe_env, ikp)
+      TYPE(sbe_env_type), POINTER, INTENT(INOUT)         :: sbe_env
+      INTEGER, INTENT(IN)                                :: ikp
+      REAL(kind=dp), DIMENSION(3)                        :: xkp_current
+      INTEGER                                            :: ikp_local, &
+                                                            info, &
+                                                            ispin, &
+                                                            j
+
+      ikp_local = ikp - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
+      ! Calculate the xkp based on equilibrium xkp and vector potential
+      xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) + sbe_env%vector_potential(:)
+      ! Now, with the kpoint coordinate, calculate the matrices
+      ! Start with overlap
+      CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
+                    sbe_env%kpoints%index_to_cell, xkp_current)
+      ! Calculate the inverse overlap
+      sbe_env%inv_overlap_kp(:,:) = sbe_env%overlap_kp(:,:)
+      CALL invcmat(sbe_env%inv_overlap_kp, info)
+      IF (info /= 0) THEN
+         CALL cp_abort(__LOCATION__, "Overlap matrix inverse failed.")
+      END IF
+      ! Continue with spin dependent operators
+      DO ispin=1, sbe_env%n_spin
+         ! Equilibrium Hamiltonian
+         CALL rs_to_kp(sbe_env%ham_zero_rs(ispin,:,:,:), sbe_env%ham_zero_kp(ispin,:,:), &
+                    sbe_env%kpoints%index_to_cell, xkp_current)
+      END DO
+      ! Continue with direction dependent operators
+      DO j = 1, 3
+         ! Moments
+         CALL rs_to_kp(sbe_env%moments_rs(j,:,:,:), sbe_env%moments_kp(j,:,:), &
+                       sbe_env%kpoints%index_to_cell, xkp_current)
+         ! Overlap gradient
+         CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_grad(j,:,:), &
+                       sbe_env%kpoints%index_to_cell, xkp_current, &
+                       j, sbe_env%hmat)
+      END DO
+      ! With moments in place, construct the effective Hamiltonian
+      DO j = 1, 3
+         DO ispin = 1, sbe_env%n_spin
+            sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_zero_kp(ispin,:,:) + &
+                                      sbe_env%moments_kp(1,:,:) * sbe_env%field(1) + &
+                                      sbe_env%moments_kp(2,:,:) * sbe_env%field(2) + &
+                                      sbe_env%moments_kp(3,:,:) * sbe_env%field(3)
+         END DO
+      END DO
+   END SUBROUTINE
 END MODULE sbe
