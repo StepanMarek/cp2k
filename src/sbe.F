@@ -87,6 +87,7 @@ CONTAINS
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                    :: sab_nl
       TYPE(sbe_env_type), POINTER                        :: sbe_env
+      REAL(kind=dp)                                      :: total_n
 
       unit_nr = cp_logger_get_default_io_unit()
       IF (unit_nr > 0) CALL print_sbe_header_info(unit_nr)
@@ -187,7 +188,16 @@ CONTAINS
          sbe_env%sim_time = REAL(i_step, kind=dp) * sbe_env%sim_dt
          ! Append to the trace
          sbe_env%time_trace(i_step - sbe_env%sim_start + 1) = sbe_env%sim_time
-         ! TODO : Update the kpoints to set the field
+         ! Update the field to current value
+         ! Vector potential holds value from last iteration
+         IF (sbe_env%dft_control%apply_efield_field) THEN
+            CALL make_field(sbe_env%dft_control, sbe_env%field, sbe_env%sim_step, sbe_env%sim_time)
+            ! Debug : Printing of fields - should be done into separate file, as with common RTP output
+            IF (sbe_env%unit_nr > 0) THEN
+               PRINT *, "Field", sbe_env%field
+               PRINT *, "Vector potential", sbe_env%vector_potential
+            END IF
+         END IF
 
          ! Reset occupation numbers
          sbe_env%occ_numbers(:,:) = 0.0_dp
@@ -219,11 +229,19 @@ CONTAINS
          ! Outputs
          ! Sum over the occupation numbers across all ranks
          CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
+         ! DEBUG : total occ number
+         total_n = SUM(sbe_env%occ_numbers(1,:)) * sbe_env%n_spin
          IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E12.3E3)") &
             " SBE| Timestep ", i_step, &
-            " time ", sbe_env%sim_time * femtoseconds, " n(1,2) ", sbe_env%occ_numbers(1,2)
+            " time ", sbe_env%sim_time * femtoseconds, " N ", total_n
+         IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A6,E12.3E3,A6,E12.3E3)") &
+            " SBE| Timestep ", i_step, &
+            " time ", sbe_env%sim_time * femtoseconds, " n(1) ", sbe_env%occ_numbers(1,1), &
+            " n(2) ", sbe_env%occ_numbers(1,2)
          ! Set the current density matrix for the next step
          sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
+         ! Update the vector potential - A(t+dt) = A(t) + E dt
+         sbe_env%vector_potential(:) = sbe_env%vector_potential(:) + sbe_env%field * sbe_env%sim_dt
       END DO
 
       ! Deallocations
@@ -257,8 +275,6 @@ CONTAINS
       ! RK-4
       IF (sbe_env%propagator_method == sbe_propagator_rk4) THEN
          ! k1 term
-         ! Update the field, current time
-         CALL make_field(sbe_env%dft_control, sbe_env%field, sbe_env%sim_step, sbe_env%sim_time)
          ! Vector potential is always set from before (previous timestep or delta kick or zero)
          CALL propagator_commutator(sbe_env%densmat_work(1,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
@@ -272,13 +288,15 @@ CONTAINS
          ! k2 term
          ! Update the field, mid-point
          ! TODO : Sim-step interpolation?
-         CALL make_field(sbe_env%dft_control, sbe_env%field, sbe_env%sim_step, &
-                         sbe_env%sim_time + 0.5_dp*sbe_env%sim_dt)
+         IF (sbe_env%dft_control%apply_efield_field) THEN
+            CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step, &
+                            sbe_env%sim_time + 0.5_dp*sbe_env%sim_dt)
+         END IF
          ! Add to vector potential
-         sbe_env%vector_potential(:) = sbe_env%vector_potential(:) + &
-                                       0.5_dp*sbe_env%sim_dt*sbe_env%field(:)
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + &
+                                       0.5_dp*sbe_env%sim_dt*sbe_env%field_next(:)
          ! Since vector potential changes, update kp matrices
-         CALL update_kp_matrices(sbe_env, ikp)
+         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
          CALL propagator_commutator(sbe_env%densmat_work(2,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
                                     sbe_env%ham_kp(ispin,:,:), &
@@ -305,14 +323,16 @@ CONTAINS
          ! TODO : k4 term is evaluated at t+Delta t - should recalculate h, S, S^(-1) and field
          ! k4 term
          ! Update the field, final time
-         CALL make_field(sbe_env%dft_control, sbe_env%field, sbe_env%sim_step + 1, &
-                         sbe_env%sim_time + sbe_env%sim_dt)
+         IF (sbe_env%dft_control%apply_efield_field) THEN
+            CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step + 1, &
+                            sbe_env%sim_time + sbe_env%sim_dt)
+         END IF
          ! Add to vector potential (stored for midpoint, so only half of timestep added)
-         sbe_env%vector_potential(:) = sbe_env%vector_potential(:) + &
-                                       0.5_dp*sbe_env%sim_dt*sbe_env%field(:)
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + &
+                                       0.5_dp*sbe_env%sim_dt*sbe_env%field_next(:)
          ! Since vector potential changes, update kp matrices
          ! TODO : Only update a given spin and ikp
-         CALL update_kp_matrices(sbe_env, ikp)
+         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
          CALL propagator_commutator(sbe_env%densmat_work(4,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
                                     sbe_env%ham_kp(ispin,:,:), &
@@ -330,8 +350,6 @@ CONTAINS
                2.0_dp * sbe_env%densmat_work(3,:,:) + sbe_env%densmat_work(4,:,:)) / 6.0_dp
          info = 0
       ELSE
-         ! Update the field, current time
-         CALL make_field(sbe_env%dft_control, sbe_env%field, sbe_env%sim_step, sbe_env%sim_time)
          ! Update the kp matrices to current time
          CALL update_kp_matrices(sbe_env, ikp)
          ! Default to forwards Euler
@@ -388,9 +406,10 @@ CONTAINS
 ! **************************************************************************************************
 !> \brief Updates kpoint matrices based on the current value of field and vector potential
 ! **************************************************************************************************
-   SUBROUTINE update_kp_matrices(sbe_env, ikp)
+   SUBROUTINE update_kp_matrices(sbe_env, ikp, current_vector_opt)
       TYPE(sbe_env_type), POINTER, INTENT(INOUT)         :: sbe_env
       INTEGER, INTENT(IN)                                :: ikp
+      REAL(kind=dp), DIMENSION(3), OPTIONAL              :: current_vector_opt
       REAL(kind=dp), DIMENSION(3)                        :: xkp_current
       INTEGER                                            :: ikp_local, &
                                                             info, &
@@ -399,7 +418,11 @@ CONTAINS
 
       ikp_local = ikp - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
       ! Calculate the xkp based on equilibrium xkp and vector potential
-      xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) + sbe_env%vector_potential(:)
+      IF (PRESENT(current_vector_opt)) THEN
+         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) + current_vector_opt(:)
+      ELSE
+         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp)
+      END IF
       ! Now, with the kpoint coordinate, calculate the matrices
       ! Start with overlap
       CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
