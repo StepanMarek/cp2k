@@ -74,7 +74,9 @@ MODULE sbe_types
                                                             sim_time = 0.0_dp, &
                                                             dephasing_time = 1.0_dp / femtoseconds
       REAL(kind=dp), DIMENSION(3)                        :: field = 0.0_dp, &
-                                                            vector_potential = 0.0_dp
+                                                            vector_potential = 0.0_dp, &
+                                                            field_next = 0.0_dp, &
+                                                            vector_potential_next = 0.0_dp
       REAL(kind=dp), DIMENSION(3,3)                      :: hmat = 0.0_dp
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: time_trace, &
                                                             eigvals, &
