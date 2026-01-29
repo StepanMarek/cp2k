@@ -93,6 +93,7 @@ MODULE sbe_types
                                                             ham_kp, & ! dim 1 : spins, dim 2 : rows, dim 3 : cols
                                                             moments_kp, & ! dim 1 : direction, dim 2 : rows, dim 3 : cols
                                                             overlap_grad ! dim 1 : direction, dim 2 : rows, dim 3 : cols
+      TYPE(section_vals_type), POINTER                   :: field_section
    END TYPE sbe_env_type
 
    PUBLIC :: sbe_env_type, &
@@ -140,6 +141,8 @@ CONTAINS
       ! Start with kpoints allocation
       CALL force_env_get(force_env, qs_env=qs_env, input=force_input)
       CALL get_qs_env(qs_env, sab_all=sab_all, para_env=para_env, dft_control=dft_control, cell=cell)
+      ! Save the output sections
+      sbe_env%field_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%FIELD")
       ! Save dft_control pointer - necessary for make_field during propagation
       sbe_env%dft_control => dft_control
       ! Save cell - need for k-gradient construction during propagation
