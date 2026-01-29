@@ -28,6 +28,7 @@ MODULE sbe
    USE kinds,                          ONLY: dp
    USE cp_log_handling,                ONLY: cp_logger_get_default_io_unit
    USE message_passing,                ONLY: mp_para_env_type
+   USE sbe_io,                         ONLY: output_field
    USE sbe_utils,                      ONLY: print_sbe_header_info
    USE sbe_types,                      ONLY: sbe_env_type, &
                                              init_sbe_env, &
@@ -192,12 +193,11 @@ CONTAINS
          ! Vector potential holds value from last iteration
          IF (sbe_env%dft_control%apply_efield_field) THEN
             CALL make_field(sbe_env%dft_control, sbe_env%field, sbe_env%sim_step, sbe_env%sim_time)
-            ! Debug : Printing of fields - should be done into separate file, as with common RTP output
-            IF (sbe_env%unit_nr > 0) THEN
-               PRINT *, "Field", sbe_env%field
-               PRINT *, "Vector potential", sbe_env%vector_potential
-            END IF
          END IF
+         ! Output the field value to the file/to the __STDOUT__
+         ! Default field is zero, so should be safe
+         CALL output_field(sbe_env%sim_time, sbe_env%field, &
+            sbe_env%field_section, i_step == sbe_env%sim_start_orig)
 
          ! Reset occupation numbers
          sbe_env%occ_numbers(:,:) = 0.0_dp
@@ -361,13 +361,13 @@ CONTAINS
          ! Add the non-commutator terms - damping and overlap derivative
          CALL get_damping_term(sbe_env, sbe_env%damping, densmat_old(:,:), ispin)
          sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
-         ! Calculate the gradient term (-q)/hbar S^(-1) (E(t) . nabla(S)) rho
-         ! E(t) . nabla(S)
-         sbe_env%grad_work(:,:) = sbe_env%field(1) * sbe_env%overlap_grad(1,:,:) + &
-                                  sbe_env%field(2) * sbe_env%overlap_grad(2,:,:) + &
+         ! Calculate the gradient term -e/hbar S^(-1) (E(t) . nabla(S)) rho
+         ! - E(t) . nabla(S)
+         sbe_env%grad_work(:,:) = -sbe_env%field(1) * sbe_env%overlap_grad(1,:,:) - &
+                                  sbe_env%field(2) * sbe_env%overlap_grad(2,:,:) - &
                                   sbe_env%field(3) * sbe_env%overlap_grad(3,:,:)
          ! Use densmat_new as additional workspace
-         ! S^(-1) (E(t) . nabla(S)) rho
+         ! - S^(-1) (E(t) . nabla(S)) rho
          CALL gemm_square(sbe_env%inv_overlap_kp, 'N', sbe_env%grad_work, 'N', &
                           densmat_old, 'N', densmat_new)
          ! Add this term to the derivative (extra minus sign due to charge of electrons)
