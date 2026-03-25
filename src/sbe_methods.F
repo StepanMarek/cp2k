@@ -32,7 +32,9 @@ MODULE sbe_methods
 
    PUBLIC :: init_densmat, &
              get_damping_term, &
-             add_occ_numbers_kp
+             get_convective_term, &
+             add_occ_numbers_kp, &
+             add_current_kp
 
 CONTAINS
 ! TODO : For GPU parallelism, probably need to write a kernel instead of a subroutine and
@@ -203,4 +205,71 @@ CONTAINS
          END DO
       END DO
    END SUBROUTINE
+! **************************************************************************************************
+!> \brief Calculates the convective term (including the sign). Spinless.
+!> \param sbe_env SBE environment with current kp overlap gradient and kp inverse overlap
+!> \param convective_term Complex value of the convective term
+!> \param densmat Current kp density matrix, which is needed to construct the convective term
+!> \param conv_workspace Complex matrix for intermediate term
+!> \author Stepan Marek
+!> \date 01.2025
+! **************************************************************************************************
+   SUBROUTINE get_convective_term(sbe_env, convective_term, densmat, conv_workspace)
+      TYPE(sbe_env_type), POINTER, INTENT(IN)               :: sbe_env
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(OUT)         :: convective_term, &
+                                                               conv_workspace
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(IN)          :: densmat
+      INTEGER                                               :: k
+
+      ! Start by multiplying field with grad of overlap
+      conv_workspace(:,:) = sbe_env%field(1) * sbe_env%overlap_grad(1,:,:)
+      DO k=2,3
+         conv_workspace(:,:) = conv_workspace(:,:) + &
+            sbe_env%field(k) * sbe_env%overlap_grad(k,:,:)
+      END DO
+      ! Now, multiply by S^(-1) and rho to get
+      ! S^(-1) (E dot grad(S)) rho
+      CALL gemm_square(sbe_env%inv_overlap_kp, 'N', conv_workspace, 'N', densmat, 'N', &
+         convective_term)
+   END SUBROUTINE get_convective_term
+! **************************************************************************************************
+!> \brief Calculates the current contributions from a given k-point as k-derivative of H
+!> \note Interprocess k-sum has to be done outside
+!> \param sbe_env SBE environment with current RS Hamiltonian
+!> \param densmat Current kp density matrix
+!> \param kpoint Current kpoint
+!> \param ispin Current spin index
+!> \param current Current vector contribution from the current kpoint
+!> \author Stepan Marek
+!> \date 02.2025
+! **************************************************************************************************
+   SUBROUTINE add_current_kp(sbe_env, densmat, xkp, ispin, current)
+      TYPE(sbe_env_type), POINTER, INTENT(IN)               :: sbe_env
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(INOUT)       :: densmat
+      REAL(kind=dp), DIMENSION(3), INTENT(IN)               :: xkp
+      INTEGER, INTENT(IN)                                   :: ispin
+      COMPLEX(kind=dp), DIMENSION(3), INTENT(OUT)           :: current
+      CHARACTER(len=*), PARAMETER                           :: routineN="add_current_kp"
+      INTEGER                                               :: i, &
+                                                               handle, &
+                                                               k
+
+      CALL timeset(routineN, handle)
+
+      ! Get the k-derivative of the Hamiltonian, store it in the densmat workspace
+      ! should be done after propagation?
+      ! TODO : Loop for cartesian directions
+      ! TODO : This might be a very good place to test the reallocation price
+      DO k=1, 3
+         CALL rs_to_kp(sbe_env%ham_zero_rs(ispin,:,:,:), sbe_env%densmat_work(1,:,:), &
+            sbe_env%kpoints%index_to_cell, xkp, k, sbe_env%hmat)
+
+         ! TODO : OMP Parallelize the trace? Could be unstable...
+         DO i=1, SIZE(densmat, 1)
+            current(k) = current(k) + sbe_env%densmat_work(k,i,i) * densmat(i,i)
+         END DO
+      END DO
+
+      CALL timestop(handle)
+   END SUBROUTINE add_current_kp
 END MODULE sbe_methods
