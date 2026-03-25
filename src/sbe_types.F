@@ -36,7 +36,8 @@ MODULE sbe_types
                               cp_logger_type, &
                               cp_get_default_logger
    USE physcon, ONLY: femtoseconds
-   USE input_constants, ONLY: sbe_propagator_rk4
+   USE input_constants, ONLY: sbe_propagator_rk4, &
+                              sbe_propagator_euler
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -248,10 +249,21 @@ CONTAINS
       ! Propagator method
       CALL section_vals_val_get(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%PROPAGATOR", &
                                 i_val=sbe_env%propagator_method)
+      IF (sbe_env%unit_nr > 0) THEN
+         WRITE (sbe_env%unit_nr, "(A16)", advance="no") " SBE| Propagator"
+         SELECT CASE(sbe_env%propagator_method)
+         CASE (sbe_propagator_rk4)
+            WRITE(sbe_env%unit_nr, "(A64)") "RK4"
+         CASE (sbe_propagator_euler)
+            WRITE(sbe_env%unit_nr, "(A64)") "EULER"
+         END SELECT
+      END IF
 
       ! TODO : Get the phenomenological dephasing time
       CALL section_vals_val_get(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%DEPHASING_TIME", &
                                 r_val=sbe_env%dephasing_time)
+      IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A20,E60.8E3)") &
+         " SBE| Dephasing time", sbe_env%dephasing_time * femtoseconds
 
       ! Allocate time
       ALLOCATE (sbe_env%time_trace(sbe_env%sim_nsteps - sbe_env%sim_start + 1), source=0.0_dp)
