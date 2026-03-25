@@ -28,7 +28,8 @@ MODULE sbe_io
    CHARACTER(len=*), PARAMETER, PRIVATE :: dformat = 'E20.8E3'
    CHARACTER(len=*), PARAMETER, PRIVATE :: col_name_format = 'A20'
 
-   PUBLIC :: output_field
+   PUBLIC :: output_field, &
+            output_occupation
 
 CONTAINS
 ! **************************************************************************************************
@@ -36,6 +37,7 @@ CONTAINS
 !> \param timestep current timestep
 !> \param field field values
 !> \param field_section input section corresponding to the field output
+!> \param header_opt when true, prints the header to a file, defaults to false
 ! **************************************************************************************************
    SUBROUTINE output_field(timestep, field, field_section, header_opt)
       REAL(kind=dp)                                      :: timestep
@@ -66,4 +68,17 @@ CONTAINS
 
       CALL cp_print_key_finished_output(field_unit, logger, field_section)
    END SUBROUTINE output_field
+   SUBROUTINE output_occupation(occ_numbers, time, unit_nr)
+      REAL(kind=dp), DIMENSION(:)                        :: occ_numbers
+      REAL(kind=dp)                                      :: time
+      INTEGER                                            :: unit_nr, i
+
+      IF (unit_nr <= 0) RETURN
+
+      WRITE (unit_nr, '(A18,'//dformat//')', advance='no') " SBE| occ_numbers ", time * femtoseconds
+      DO i=1,SIZE(occ_numbers)-1
+         WRITE (unit_nr, '('//dformat//')', advance='no') occ_numbers(i)
+      END DO
+      WRITE (unit_nr, '('//dformat//')') occ_numbers(SIZE(occ_numbers))
+   END SUBROUTINE output_occupation
 END MODULE sbe_io
