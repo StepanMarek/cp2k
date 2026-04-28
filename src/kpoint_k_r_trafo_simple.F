@@ -55,15 +55,17 @@ CONTAINS
 !> \param rs_array_out Multidimensional array - matrices are duplicated on each MPI rank
 !>                     dim  1 : spin, dim 2 : rows, dim 3 : cols, dim 4 : image index
 !> \param cell_to_index_out Cell to index array for the destination array
+!> \param spins_to_repl Number of spins to replicate -- upper bound in rs_arra_out spin index
 !> \date 11.2025
 !> \author Stepan Marek
 ! **************************************************************************************************
-   SUBROUTINE replicate_rs_matrices(rs_dbcsr_in, kpoint_in, rs_array_out, cell_to_index_out)
+   SUBROUTINE replicate_rs_matrices(rs_dbcsr_in, kpoint_in, rs_array_out, cell_to_index_out, spins_to_repl)
       ! dimension 1 : spin, dimension 2 : image cell index
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rs_dbcsr_in
       TYPE(kpoint_type), POINTER                         :: kpoint_in
       REAL(kind=dp), DIMENSION(:, :, :, :)               :: rs_array_out
       INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index_out
+      INTEGER, OPTIONAL                                  :: spins_to_repl
 
       CHARACTER(len=*), PARAMETER :: routineN = 'replicate_rs_matrices'
 
@@ -86,7 +88,11 @@ CONTAINS
       sab_kp_src => kpoint_in%sab_nl
       ! NOTE : The first index in matrix_s_kp is not spin index, but number of derivatives.
       !        But, for matrix_ks_kp, this is indeed the spin index.
-      n_spin = SIZE(rs_dbcsr_in, 1)
+      IF (PRESENT(spins_to_repl)) THEN
+         n_spin = spins_to_repl
+      ELSE
+         n_spin = SIZE(rs_dbcsr_in, 1)
+      END IF
       CALL dbcsr_get_info(rs_dbcsr_in(1, 1)%matrix, group=group, matrix_type=matrix_sym)
       DO ispin = 1, n_spin
          CALL neighbor_list_iterator_create(iterator, sab_kp_src)
