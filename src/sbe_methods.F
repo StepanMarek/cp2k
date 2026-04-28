@@ -243,7 +243,7 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 02.2025
 ! **************************************************************************************************
-   SUBROUTINE add_current_kp(sbe_env, densmat, xkp, ispin, current)
+   SUBROUTINE add_current_kp(sbe_env, densmat, xkp, ispin, current, ikp)
       TYPE(sbe_env_type), POINTER, INTENT(IN)               :: sbe_env
       COMPLEX(kind=dp), DIMENSION(:,:), INTENT(INOUT)       :: densmat
       REAL(kind=dp), DIMENSION(3), INTENT(IN)               :: xkp
@@ -252,7 +252,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                           :: routineN="add_current_kp"
       INTEGER                                               :: i, &
                                                                handle, &
-                                                               k
+                                                               k, j, ikp
 
       CALL timeset(routineN, handle)
 
@@ -265,8 +265,12 @@ CONTAINS
             sbe_env%kpoints%index_to_cell, xkp, k, sbe_env%hmat)
 
          ! TODO : OMP Parallelize the trace? Could be unstable...
-         DO i=1, SIZE(densmat, 1)
-            current(k) = current(k) + sbe_env%densmat_work(k,i,i) * densmat(i,i)
+         ! TODO : Shouldn't this include multiplication of diff H/diff k times densmat?
+         DO i=1, SIZE(densmat, 2)
+            DO j=1, SIZE(densmat, 1)
+               current(k) = current(k) + sbe_env%densmat_work(k,i,j) * densmat(j,i) * &
+                  sbe_env%kpoints%wkp(ikp)
+            END DO
          END DO
       END DO
 
