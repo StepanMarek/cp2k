@@ -1029,7 +1029,8 @@ MODULE input_constants
                                                rtp_method_sbe = 4
 
    INTEGER, PARAMETER, PUBLIC               :: rtp_bse_ham_ks = 1, &
-                                               rtp_bse_ham_gw = 2
+                                               rtp_bse_ham_gw = 2, &
+                                               rtp_bse_ham_ks_free = 3
 
    INTEGER, PARAMETER, PUBLIC               :: rtp_bse_kernel_ri_default = 0, &
                                                rtp_bse_kernel_ri_rs = 1, &

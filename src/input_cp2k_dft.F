@@ -43,7 +43,7 @@ MODULE input_cp2k_dft
         numerical, plus_u_lowdin, plus_u_mulliken, plus_u_mulliken_charges, plus_u_tensorial, &
         real_time_propagation, rel_dkh, rel_none, rel_pot_erfc, rel_pot_full, rel_sczora_mp, &
         rel_trans_atom, rel_trans_full, rel_trans_molecule, rel_zora, rel_zora_full, rel_zora_mp, &
-        rtp_bse_ham_gw, rtp_bse_ham_ks, rtp_bse_kernel_ri_ao, rtp_bse_kernel_ri_default, &
+        rtp_bse_ham_gw, rtp_bse_ham_ks, rtp_bse_ham_ks_free, rtp_bse_kernel_ri_ao, rtp_bse_kernel_ri_default, &
         rtp_bse_kernel_ri_rs, rtp_method_bse, rtp_method_tddft, rtp_method_sbe, sccs_andreussi, &
         sccs_derivative_cd3, sccs_derivative_cd5, sccs_derivative_cd7, sccs_derivative_fft, &
         sccs_fattebert_gygi, sccs_saa_andreussi, sic_ad, sic_eo, sic_list_all, sic_list_unpaired, &
@@ -2107,6 +2107,15 @@ CONTAINS
                           enum_desc=s2a("Use Kohn-Sham Hamiltonian for Green's function propagation.", &
                                         "Use GW Hamiltonian for Green's function propagation. The GW "// &
                                         "eigenvalues from the highest-level GW flavor will be picked."))
+                          usage="RTBSE_HAMILTONIAN GW", &
+                          default_i_val=rtp_bse_ham_gw, &
+                          enum_c_vals=s2a("KS", "GW", "KS_FREE"), &
+                          enum_i_vals=[rtp_bse_ham_ks, rtp_bse_ham_gw, rtp_bse_ham_ks_free], &
+                          enum_desc=s2a("Use Kohn-Sham Hamiltonian for Green's propagation.", &
+                                        "Use GW Hamiltonian for Green's function propagation. The GW "// &
+                                        "eigenvalues from the highest-level GW flavor will be picked.", &
+                                        "Use Kohn-Sham Hamiltonian and neglect interaction terms "// &
+                                        "(Hartree and Fock exchange) in the Green's function propagation."))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
