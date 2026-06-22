@@ -28,6 +28,8 @@ MODULE rt_bse
                            cp_cfm_to_fm, &
                            cp_cfm_create, &
                            cp_cfm_get_info, &
+                           cp_cfm_set_all, &
+                           cp_cfm_set_element, &
                            cp_cfm_release
    USE kinds, ONLY: dp
    USE cp_dbcsr_api, ONLY: dbcsr_p_type, &
@@ -78,6 +80,8 @@ MODULE rt_bse
    USE efield_utils, ONLY: make_field
    USE message_passing, ONLY: mp_para_env_type
    USE input_constants, ONLY: rtp_bse_ham_g0w0, &
+                              rtp_bse_ham_ks, &
+                              rtp_bse_ham_ks_free, &
                               use_mom_ref_zero, &
                               do_bch, &
                               do_exact, &
@@ -379,7 +383,6 @@ CONTAINS
       DO i = 1, rtbse_env%n_spin
          occupations(:) = 0.0_dp
          occupations(1:rtbse_env%n_occ(i)) = 1.0_dp
-         ! Create real part
          CALL cp_fm_to_fm(bs_env%fm_mo_coeff_Gamma(i), rtbse_env%real_workspace(1))
          CALL cp_fm_column_scale(rtbse_env%real_workspace(1), occupations)
          CALL parallel_gemm("N", "T", rtbse_env%n_ao, rtbse_env%n_ao, rtbse_env%n_ao, &
@@ -468,15 +471,17 @@ CONTAINS
       CALL init_hartree(rtbse_env, rtbse_env%v_dbcsr)
       ! Calculate the original Hartree potential
       ! Uses rho_orig - same as rho for initial run but different for continued run
-      DO i = 1, rtbse_env%n_spin
-         CALL get_hartree(rtbse_env, rtbse_env%rho_orig(i), rtbse_env%hartree_curr(i))
-         ! Scaling by spin degeneracy
-         CALL cp_fm_scale(rtbse_env%spin_degeneracy, rtbse_env%hartree_curr(i))
-         ! Subtract the reference from the reference Hamiltonian
-         CALL cp_fm_to_cfm(msourcer=rtbse_env%hartree_curr(i), mtarget=rtbse_env%ham_workspace(1))
-         CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_reference(i), &
-                                   CMPLX(-1.0, 0.0, kind=dp), rtbse_env%ham_workspace(1))
-      END DO
+      IF (rtbse_env%ham_reference_type /= rtp_bse_ham_ks_free) THEN
+         DO i = 1, rtbse_env%n_spin
+            CALL get_hartree(rtbse_env, rtbse_env%rho_orig(i), rtbse_env%hartree_curr(i))
+            ! Scaling by spin degeneracy
+            CALL cp_fm_scale(rtbse_env%spin_degeneracy, rtbse_env%hartree_curr(i))
+            ! Subtract the reference from the reference Hamiltonian
+            CALL cp_fm_to_cfm(msourcer=rtbse_env%hartree_curr(i), mtarget=rtbse_env%ham_workspace(1))
+            CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_reference(i), &
+                                      CMPLX(-1.0, 0.0, kind=dp), rtbse_env%ham_workspace(1))
+         END DO
+      END IF
       ! ****** END HARTREE POTENTIAL REFERENCE CALCULATION
 
       CALL timestop(handle)
@@ -499,36 +504,43 @@ CONTAINS
       CALL get_qs_env(rtbse_env%qs_env, bs_env=bs_env)
 
       ! ****** START COHSEX REFERENCE CALCULATION
-      IF (rtbse_env%ham_reference_type == rtp_bse_ham_g0w0) THEN
+      ! Calculate the COHSEX starting energies
+      SELECT CASE (rtbse_env%ham_reference_type)
+      CASE (rtp_bse_ham_g0w0)
          ! In a non-HF calculation, copy the actual correlation part of the interaction
          CALL copy_fm_to_dbcsr(bs_env%fm_W_MIC_freq_zero, rtbse_env%w_dbcsr)
-      ELSE
-         ! In HF, correlation is set to zero
-         CALL dbcsr_set(rtbse_env%w_dbcsr, 0.0_dp)
-      END IF
-      ! Add the Hartree to the screened_dbt tensor - now W = V + W^c
-      CALL dbcsr_add(rtbse_env%w_dbcsr, rtbse_env%v_dbcsr, 1.0_dp, 1.0_dp)
-      CALL dbt_copy_matrix_to_tensor(rtbse_env%w_dbcsr, rtbse_env%screened_dbt)
-      ! Calculate the COHSEX starting energies
-      DO i = 1, rtbse_env%n_spin
-         IF (rtbse_env%ham_reference_type == rtp_bse_ham_g0w0) THEN
-            ! Subtract the v_xc from COH part of the self-energy, as V_xc is also not updated during the timestepping
+         ! Add the Hartree to the screened_dbt tensor - now W = V + W^c
+         CALL dbcsr_add(rtbse_env%w_dbcsr, rtbse_env%v_dbcsr, 1.0_dp, 1.0_dp)
+         CALL dbt_copy_matrix_to_tensor(rtbse_env%w_dbcsr, rtbse_env%screened_dbt)
+         DO i = 1, rtbse_env%n_spin
             ! TODO : Allow no COH calculation for static screening
             CALL get_sigma(rtbse_env, rtbse_env%sigma_COH(i), -0.5_dp, rtbse_env%S_inv_fm)
             ! Copy and subtract from the complex reference hamiltonian
             CALL cp_fm_to_cfm(msourcer=rtbse_env%sigma_COH(i), mtarget=rtbse_env%ham_workspace(1))
             CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_reference(i), &
                                       CMPLX(-1.0, 0.0, kind=dp), rtbse_env%ham_workspace(1))
-         END IF
-         ! Calculate exchange part - TODO : should this be applied for different spins? - TEST with O2 HF propagation?
-         ! So far only closed shell tested
-         ! Uses rho_orig - same as rho for initial run but different for continued run
-         ! For KS reference this is the time-dependent Fock exchange (w_dbcsr = v only).
-         CALL get_sigma(rtbse_env, rtbse_env%sigma_SEX(i), -1.0_dp, rtbse_env%rho_orig(i))
-         ! Subtract from the complex reference Hamiltonian
-         CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_reference(i), &
-                                   CMPLX(-1.0, 0.0, kind=dp), rtbse_env%sigma_SEX(i))
-      END DO
+            ! Calculate exchange part - TODO : should this be applied for different spins? - TEST with O2 HF propagation?
+            ! So far only closed shell tested
+            ! Uses rho_orig - same as rho for initial run but different for continued run
+            CALL get_sigma(rtbse_env, rtbse_env%sigma_SEX(i), -1.0_dp, rtbse_env%rho_orig(i))
+            ! Subtract from the complex reference Hamiltonian
+            CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_reference(i), &
+                                      CMPLX(-1.0, 0.0, kind=dp), rtbse_env%sigma_SEX(i))
+         END DO
+      CASE (rtp_bse_ham_ks)
+         ! In HF, correlation is set to zero
+         CALL dbcsr_set(rtbse_env%w_dbcsr, 0.0_dp)
+         ! Add the Hartree to the screened_dbt tensor - now W = V
+         CALL dbt_copy_matrix_to_tensor(rtbse_env%v_dbcsr, rtbse_env%screened_dbt)
+         ! KS Hamiltonian - use time-dependent Fock exchange
+         DO i = 1, rtbse_env%n_spin
+            CALL get_sigma(rtbse_env, rtbse_env%sigma_SEX(i), -1.0_dp, rtbse_env%rho_orig(i))
+            CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_reference(i), &
+                                      CMPLX(-1.0, 0.0, kind=dp), rtbse_env%sigma_SEX(i))
+         END DO
+      CASE DEFAULT
+         ! NOTE : In the free case, do nothing
+      END SELECT
       ! ****** END COHSEX REFERENCE CALCULATION
 
       CALL timestop(handle)
@@ -730,34 +742,38 @@ CONTAINS
          rtbse_env%field(:) = 0.0_dp
       END IF
       DO j = 1, nspin
+         ! == Add field terms
          DO k = 1, 3
             ! Minus sign due to charge of electrons
             CALL cp_fm_to_cfm(msourcer=rtbse_env%moments_field(k, 1), mtarget=rtbse_env%ham_workspace(1))
             CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_effective(j), &
                                       CMPLX(rtbse_env%field(k), 0.0, kind=dp), rtbse_env%ham_workspace(1))
          END DO
+         ! == Add the COH part - so far static but can be dynamic in principle throught the W updates
          IF (rtbse_env%ham_reference_type == rtp_bse_ham_g0w0) THEN
-            ! Add the COH part - so far static but can be dynamic in principle through the W updates
             CALL get_sigma(rtbse_env, rtbse_env%sigma_COH(j), -0.5_dp, rtbse_env%S_inv_fm)
             CALL cp_fm_to_cfm(msourcer=rtbse_env%sigma_COH(j), mtarget=rtbse_env%ham_workspace(1))
             CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_effective(j), &
                                       CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_workspace(1))
          END IF
-         ! Calculate the (S)EX part - based on provided rho
-         ! iGW = - rho W
-         CALL get_sigma(rtbse_env, rtbse_env%sigma_SEX(j), -1.0_dp, rho(j))
-         CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_effective(j), &
-                                   CMPLX(1.0, 0.0, kind=dp), rtbse_env%sigma_SEX(j))
-         ! Calculate Hartree potential
-         ! Hartree potential is scaled by number of electrons in each MO - spin degeneracy
-         CALL get_hartree(rtbse_env, rho(j), &
-                          rtbse_env%hartree_curr(j))
-         CALL cp_fm_to_cfm(msourcer=rtbse_env%hartree_curr(j), mtarget=rtbse_env%ham_workspace(1))
-         CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_effective(j), &
-                                   CMPLX(rtbse_env%spin_degeneracy, 0.0, kind=dp), rtbse_env%ham_workspace(1))
+         ! == Add (S)EX part and Hartree part
+         IF (rtbse_env%ham_reference_type /= rtp_bse_ham_ks_free) THEN
+            ! Calculate the (S)EX part - based on provided rho
+            ! iGW = - rho W
+            CALL get_sigma(rtbse_env, rtbse_env%sigma_SEX(j), -1.0_dp, rho(j))
+            CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_effective(j), &
+                                      CMPLX(1.0, 0.0, kind=dp), rtbse_env%sigma_SEX(j))
+            ! Calculate Hartree potential
+            ! Hartree potential is scaled by number of electrons in each MO - spin degeneracy
+            CALL get_hartree(rtbse_env, rho(j), &
+                             rtbse_env%hartree_curr(j))
+            CALL cp_fm_to_cfm(msourcer=rtbse_env%hartree_curr(j), mtarget=rtbse_env%ham_workspace(1))
+            CALL cp_cfm_scale_and_add(CMPLX(1.0, 0.0, kind=dp), rtbse_env%ham_effective(j), &
+                                      CMPLX(rtbse_env%spin_degeneracy, 0.0, kind=dp), rtbse_env%ham_workspace(1))
+         END IF
          ! Enforce hermiticity of the effective Hamiltonian
          ! Important components without forced Hermiticity - moments matrix, sigma matrices, Hartree matrix
-         ! single particle Ham
+         ! single particle Hamiltonian
          CALL cp_cfm_transpose(rtbse_env%ham_effective(j), 'C', rtbse_env%ham_workspace(1))
          CALL cp_cfm_scale_and_add(CMPLX(0.5, 0.0, kind=dp), rtbse_env%ham_effective(j), &
                                    CMPLX(0.5, 0.0, kind=dp), rtbse_env%ham_workspace(1))
@@ -1581,4 +1597,61 @@ CONTAINS
 
       CALL timestop(handle)
    END SUBROUTINE cp_cfm_gexp
+   SUBROUTINE init_rho_basic_excitation(rtbse_env, rho, lambda_opt)
+      TYPE(rtbse_env_type), POINTER                :: rtbse_env
+      TYPE(cp_cfm_type), DIMENSION(:), POINTER     :: rho
+      REAL(kind=dp), OPTIONAL                      :: lambda_opt
+      CHARACTER(len=*), PARAMETER                  :: routineN = "init_rho_basic_excitation"
+      INTEGER                                      :: i, k
+      REAL(kind=dp)                                :: lambda
+
+      IF (PRESENT(lambda_opt)) THEN
+         lambda = lambda_opt
+      ELSE
+         lambda = 0.2
+      END IF
+
+      DO i=1, rtbse_env%n_spin
+         ! Elementary excitation
+         ! Standard excitation scheme is to exactly couple only two specific MO orbitals
+         ! then, the excitation leads to changes to following MO basis rho elements:
+         ! (j-occupied index, p-unoccupied index)
+         ! rho(j,j) -> cos(lambda)**2
+         ! rho(p,p) -> sin(lambda)**2
+         ! rho(j,p) -> -i sin(lambda) cos(lambda) = -rho(p,j)
+         ! This leaves rho with the same trace, Hermitian and idempotent
+         ! Here, only LUMO and HOMO are coupled
+         ! Prepare the equilibrium density
+         CALL cp_fm_to_cfm(msourcer=rtbse_env%bs_env%fm_mo_coeff_Gamma(i), mtarget=rtbse_env%rho_workspace(2))
+         CALL cp_cfm_set_all(rtbse_env%rho_workspace(1), CMPLX(0.0, 0.0, kind=dp))
+         DO k=1, rtbse_env%n_occ(i)
+            CALL cp_cfm_set_element(rtbse_env%rho_workspace(1), k, k, CMPLX(1.0, 0.0, kind=dp))
+         END DO
+         ! Now, prepare LUMO-HOMO excitation
+         CALL cp_cfm_set_element(rtbse_env%rho_workspace(1), &
+                                rtbse_env%n_occ(i), &
+                                rtbse_env%n_occ(i), &
+                                CMPLX(COS(lambda)*COS(lambda), 0.0, kind=dp))
+         CALL cp_cfm_set_element(rtbse_env%rho_workspace(1), &
+                                rtbse_env%n_occ(i)+1, &
+                                rtbse_env%n_occ(i)+1, &
+                                CMPLX(SIN(lambda)*SIN(lambda), 0.0, kind=dp))
+         CALL cp_cfm_set_element(rtbse_env%rho_workspace(1), &
+                                rtbse_env%n_occ(i), &
+                                rtbse_env%n_occ(i)+1, &
+                                CMPLX(0.0, -SIN(lambda)*COS(lambda), kind=dp))
+         CALL cp_cfm_set_element(rtbse_env%rho_workspace(1), &
+                                rtbse_env%n_occ(i)+1, &
+                                rtbse_env%n_occ(i), &
+                                CMPLX(0.0, SIN(lambda)*COS(lambda), kind=dp))
+         ! Multiply and save to rho
+         CALL parallel_gemm("N", "N", rtbse_env%n_ao, rtbse_env%n_ao, rtbse_env%n_ao, &
+                            CMPLX(1.0, 0.0, kind=dp), rtbse_env%rho_workspace(2), rtbse_env%rho_workspace(1), &
+                            CMPLX(0.0, 0.0, kind=dp), rtbse_env%rho_workspace(3))
+         CALL parallel_gemm("N", "C", rtbse_env%n_ao, rtbse_env%n_ao, rtbse_env%n_ao, &
+                            CMPLX(1.0, 0.0, kind=dp), rtbse_env%rho_workspace(3), rtbse_env%rho_workspace(2), &
+                            CMPLX(0.0, 0.0, kind=dp), rtbse_env%rho_workspace(4))
+         CALL cp_cfm_to_cfm(rtbse_env%rho_workspace(4), rho(i))
+      END DO
+   END SUBROUTINE init_rho_basic_excitation
 END MODULE rt_bse

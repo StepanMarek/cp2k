@@ -40,6 +40,7 @@ MODULE rt_bse_io
                               do_bch, &
                               rtp_bse_ham_g0w0, &
                               rtp_bse_ham_ks, &
+                              rtp_bse_ham_ks_free, &
                               use_rt_restart, &
                               restart_guess
    USE qs_environment_types, ONLY: get_qs_env
@@ -121,6 +122,10 @@ CONTAINS
             WRITE (rtbse_env%unit_nr, '(A58)') 'G0W0'
          CASE (rtp_bse_ham_ks)
             WRITE (rtbse_env%unit_nr, '(A58)') 'Kohn-Sham'
+         CASE (rtp_bse_ham_ks_free)
+            WRITE (rtbse_env%unit_nr, '(A58)') 'Kohn-Sham Free'
+         CASE DEFAULT
+            CPABORT("Unknown reference Hamiltonian type descriptor in RTBSE!")
          END SELECT
 
          WRITE (rtbse_env%unit_nr, '(A18,L62)') ' Apply delta pulse', &
