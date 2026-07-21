@@ -184,6 +184,8 @@ CONTAINS
       COMPLEX(kind=dp), DIMENSION(:,:,:)                    :: densmat ! dim 1 : spin, dim 2 : rows, dim 3 : cols
       INTEGER                                               :: ikp
       INTEGER                                               :: n, info, ispin
+      ! ! DEBUG : orthogonality of MOs
+      ! INTEGER                                               :: i, j
       ! For current local kpoint, get the transformation from AO to get n_m(k)
       ! Get the molecular orbitals
       DO ispin=1, sbe_env%n_spin
@@ -203,6 +205,14 @@ CONTAINS
             occ_numbers(ispin,n) = occ_numbers(ispin,n) + &
                REAL(sbe_env%densmat_work(3,n,n), kind=dp) * sbe_env%kpoints%wkp(ikp)
          END DO
+         ! ! DEBUG : Check precision in orthogonality of the MOs
+         ! CALL gemm_square(sbe_env%densmat_work(1,:,:), 'C', sbe_env%overlap_kp, 'N', &
+         !    sbe_env%densmat_work(1,:,:), 'N', sbe_env%densmat_work(3,:,:))
+         ! DO i=1,sbe_env%n_ao
+         !    DO j=1, sbe_env%n_ao
+         !       PRINT *, ikp, i, j, sbe_env%densmat_work(3,i,j)
+         !    END DO
+         ! END DO
       END DO
    END SUBROUTINE
 ! **************************************************************************************************
@@ -227,6 +237,8 @@ CONTAINS
          conv_workspace(:,:) = conv_workspace(:,:) + &
             sbe_env%field(k) * sbe_env%overlap_grad(k,:,:)
       END DO
+      ! ! DEBUG
+      ! conv_workspace(:,:) = CMPLX(0.0, 0.0, kind=dp)
       ! Now, multiply by S^(-1) and rho to get
       ! S^(-1) (E dot grad(S)) rho
       CALL gemm_square(sbe_env%inv_overlap_kp, 'N', conv_workspace, 'N', densmat, 'N', &
@@ -265,10 +277,9 @@ CONTAINS
             sbe_env%kpoints%index_to_cell, xkp, k, sbe_env%hmat)
 
          ! TODO : OMP Parallelize the trace? Could be unstable...
-         ! TODO : Shouldn't this include multiplication of diff H/diff k times densmat?
          DO i=1, SIZE(densmat, 2)
             DO j=1, SIZE(densmat, 1)
-               current(k) = current(k) + sbe_env%densmat_work(k,i,j) * densmat(j,i) * &
+               current(k) = current(k) + sbe_env%densmat_work(1,i,j) * densmat(j,i) * &
                   sbe_env%kpoints%wkp(ikp)
             END DO
          END DO
