@@ -91,8 +91,8 @@ CONTAINS
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                    :: sab_nl
       TYPE(sbe_env_type), POINTER                        :: sbe_env
-      REAL(kind=dp)                                      :: total_n
-      COMPLEX(kind=dp), DIMENSION(3)                        :: total_current
+      REAL(kind=dp)                                      :: total_n, lambda
+      COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
 
       unit_nr = cp_logger_get_default_io_unit()
       IF (unit_nr > 0) CALL print_sbe_header_info(unit_nr)
@@ -129,11 +129,12 @@ CONTAINS
       ! CALL dbcsr_release(s_k)
       ! CALL dbcsr_release(sc_k)
       ! === Transformation by the duplicated method
+      IF (unit_nr > 0) WRITE(unit_nr, "(A29,I51)") " SBE| Number of mirror images", sbe_env%n_images
       IF (unit_nr > 0) WRITE(unit_nr, "(A52,E25.3,A3)") &
               " SBE| Approximate memory per rank for overlap matrix", REAL(sbe_env%n_spin, kind=dp) * &
               REAL(sbe_env%n_images, kind=dp) * REAL(sbe_env%n_ao, kind=dp) * REAL(sbe_env%n_ao, kind=dp) / &
               (1024.0_dp * 1024.0_dp * 1024.0_dp), "GiB"
-      CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index)
+      CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index, 1)
       CALL replicate_rs_matrices(matrix_h_kp, kpoints, sbe_env%ham_zero_rs, sbe_env%kpoints%cell_to_index)
 
       ! Generate the moments in RS
@@ -167,24 +168,47 @@ CONTAINS
          sbe_env%vector_potential(:) = 0.0_dp
          CALL update_kp_matrices(sbe_env, i)
          i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
-         ! CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
-         !               sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
-         ! DO j = 1, sbe_env%n_spin
-         !    CALL rs_to_kp(sbe_env%ham_zero_rs(j,:,:,:), sbe_env%ham_zero_kp(j,:,:), &
-         !                  sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
-         !    ! Initialize the density
-         !    CALL init_densmat(sbe_env%densmat(j,:,:,i_local), j, &
-         !                      sbe_env%ham_zero_kp(j,:,:), sbe_env%overlap_kp, &
-         !                      qs_env, sbe_env)
-         ! END DO
+         CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
+                       sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
          DO j = 1, sbe_env%n_spin
+            CALL rs_to_kp(sbe_env%ham_zero_rs(j,:,:,:), sbe_env%ham_zero_kp(j,:,:), &
+                          sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
+            ! ! DEBUG : Elementary LUMO-HOMO excitation
+            ! Need to get eigenvectors
+            sbe_env%densmat_work(1,:,:) = sbe_env%overlap_kp(:, :)
+            sbe_env%densmat_work(2,:,:) = sbe_env%ham_zero_kp(j,:, :)
+            CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
+                       sbe_env%densmat_work(1,:,:), sbe_env%n_ao, &
+                       sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
+            ! Eigenvectors are in densmat_work(2,:,:)
+            ! Save the eigenvectors
+            sbe_env%current_mo_coeffs(:,:) = sbe_env%densmat_work(2,:,:)
+            ! lambda = 0.2
+            ! ! Occupations in MO
+            ! ! CHECK : all relevant occupations set?
+            ! sbe_env%densmat_work(1,1,1) = CMPLX(COS(lambda) * COS(lambda), 0.0, kind=dp)
+            ! sbe_env%densmat_work(1,2,2) = CMPLX(SIN(lambda) * SIN(lambda), 0.0, kind=dp)
+            ! sbe_env%densmat_work(1,1,2) = CMPLX(0.0, -SIN(lambda) * COS(lambda), kind=dp)
+            ! sbe_env%densmat_work(1,2,1) = CMPLX(0.0, SIN(lambda) * COS(lambda), kind=dp)
+            ! ! Multiply from right
+            ! CALL gemm_square(sbe_env%densmat_work(2,:,:), "N", sbe_env%densmat_work(1,:,:), "N", sbe_env%densmat_work(3,:,:))
+            ! ! Multiply from the left
+            ! CALL gemm_square(sbe_env%densmat_work(3,:,:), "N", sbe_env%densmat_work(2,:,:), "C", sbe_env%densmat(j,:,:,i_local))
+            ! PRINT *, "kpoint", i, "spin", j, "density AO", sbe_env%densmat(j, :, :, i_local)
+            ! Initialize the density
+            MARK_USED(lambda)
             CALL init_densmat(sbe_env%densmat(j,:,:,i_local), j, &
                               sbe_env%ham_zero_kp(j,:,:), sbe_env%overlap_kp, &
                               qs_env, sbe_env)
          END DO
       END DO
 
-      ! TODO : Initialization of moments - for the 
+      ! Delta pulse application
+      ! In velocity gauge, simply change the vector potential to non-equilibrium value
+      IF (sbe_env%apply_delta_pulse) THEN
+         sbe_env%vector_potential(:) = sbe_env%delta_pulse_scale * &
+            REAL(sbe_env%delta_pulse_direction(:), kind=dp)
+      END IF
 
       ! Start the actual simulation
       DO i_step=sbe_env%sim_start, sbe_env%sim_nsteps
@@ -205,7 +229,7 @@ CONTAINS
 
          ! Reset occupation numbers
          sbe_env%occ_numbers(:,:) = 0.0_dp
-         total_current(:) = 0.0_dp
+         total_current(:) = CMPLX(0.0, 0.0, kind=dp)
 
          ! Iteration over local kpoints
          ! TODO : Run OMP over local kpoints or not?
@@ -223,10 +247,10 @@ CONTAINS
             END DO
             ! Export observables
             ! Per-kpoint operations - add occ_numbers
-            CALL add_occ_numbers_kp(sbe_env, sbe_env%occ_numbers, sbe_env%densmat_next(:,:,:,i_local), i_local)
+            CALL add_occ_numbers_kp(sbe_env, sbe_env%occ_numbers, sbe_env%densmat_next(:,:,:,i_local), i)
             ! add current
             ! TODO : Spin
-            CALL add_current_kp(sbe_env, sbe_env%densmat(1,:,:,i_local), sbe_env%kpoints%xkp(:,i), 1, total_current(:))
+            CALL add_current_kp(sbe_env, sbe_env%densmat(1,:,:,i_local), sbe_env%kpoints%xkp(:,i), 1, total_current(:), i)
          END DO
          ! Info can report e.g. self-consistency failures
          IF (info > 0) THEN
@@ -237,20 +261,18 @@ CONTAINS
          ! Sum over the occupation numbers across all ranks
          CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
          CALL sbe_env%kpoints%para_env%sum(total_current)
-         ! DEBUG : total occ number
+         ! DEBUG : total occ number, TODO : Difference to equilibrium
+         ! TODO : Idempotency metric
          total_n = SUM(sbe_env%occ_numbers(1,:)) * sbe_env%n_spin
-         IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E12.3E3)") &
+         IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E20.8E3)") &
             " SBE| Timestep ", i_step, &
             " time ", sbe_env%sim_time * femtoseconds, " N ", total_n
-         IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E12.3E3,E12.3E3,E12.3E3)") &
+         IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E20.8E3,E20.8E3,E20.8E3)") &
             " SBE| Timestep ", i_step, &
             " time ", sbe_env%sim_time * femtoseconds, " current ", &
             REAL(total_current(1)), REAL(total_current(2)), REAL(total_current(3))
-         IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A6,E12.3E3,A6,E12.3E3)") &
-            " SBE| Timestep ", i_step, &
-            " time ", sbe_env%sim_time * femtoseconds, " n(4) ", sbe_env%occ_numbers(1,4), &
-            " n(5) ", sbe_env%occ_numbers(1,5)
          CALL output_occupation(sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%unit_nr)
+         CALL output_occupation(1.0_dp - sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%unit_nr)
          ! Set the current density matrix for the next step
          sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
          ! Update the vector potential - A(t+dt) = A(t) + E dt
@@ -401,6 +423,10 @@ CONTAINS
          sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
          densmat_new(:,:) = densmat_old(:,:) + &
             sbe_env%sim_dt * sbe_env%densmat_work(1,:,:)
+         ! To remain consistent with RK4 - update the kp-matrices to the next vector potential
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + &
+                                       sbe_env%sim_dt*sbe_env%field(:)
+         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
          info = 0
       END IF
 
@@ -446,9 +472,9 @@ CONTAINS
       ikp_local = ikp - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
       ! Calculate the xkp based on equilibrium xkp and vector potential
       IF (PRESENT(current_vector_opt)) THEN
-         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) + current_vector_opt(:)
+         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) - current_vector_opt(:)
       ELSE
-         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) + sbe_env%vector_potential(:)
+         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) - sbe_env%vector_potential(:)
       END IF
       ! Now, with the kpoint coordinate, calculate the matrices
       ! Start with overlap

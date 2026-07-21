@@ -73,11 +73,14 @@ MODULE sbe_types
       INTEGER                                            :: propagator_method = sbe_propagator_rk4
       REAL(kind=dp)                                      :: sim_dt = 1.0e-3_dp / femtoseconds, &
                                                             sim_time = 0.0_dp, &
-                                                            dephasing_time = 1.0_dp / femtoseconds
+                                                            dephasing_time = 1.0_dp / femtoseconds, &
+                                                            delta_pulse_scale = 0.0_dp
       REAL(kind=dp), DIMENSION(3)                        :: field = 0.0_dp, &
                                                             vector_potential = 0.0_dp, &
                                                             field_next = 0.0_dp, &
                                                             vector_potential_next = 0.0_dp
+      INTEGER, DIMENSION(3)                              :: delta_pulse_direction = 0.0_dp
+      LOGICAL                                            :: apply_delta_pulse = .FALSE.
       REAL(kind=dp), DIMENSION(3,3)                      :: hmat = 0.0_dp
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: time_trace, &
                                                             eigvals, &
@@ -87,6 +90,7 @@ MODULE sbe_types
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: damping, &
                                                             overlap_kp, &
                                                             inv_overlap_kp, &
+                                                            current_mo_coeffs, &
                                                             grad_work ! dim 1 : rows, dim 2 : cols
       COMPLEX(kind=dp), DIMENSION(:,:,:), ALLOCATABLE    :: damping_work, & ! dim 1 : work index, dim 2 : rows, dim 3 : cols
                                                             densmat_work, & ! dim 1 : work index, dim 2 : rows, dim 3 : cols
@@ -150,10 +154,9 @@ CONTAINS
       sbe_env%hmat = cell%hmat
 
       CALL kpoint_create(sbe_env%kpoints)
-      CALL kpoint_init_cell_index(sbe_env%kpoints, sab_all, para_env, dft_control)
+      CALL kpoint_init_cell_index(sbe_env%kpoints, sab_all, para_env, sbe_env%n_images)
       sbe_env%kpoints%para_env => para_env
       CALL para_env%retain()
-      sbe_env%n_images = SIZE(sbe_env%kpoints%index_to_cell, 2)
 
       ! TODO : Construct the (non-symmetric+full) kpoint grid
       ! Start by getting the info into kpoints
@@ -208,6 +211,7 @@ CONTAINS
       ALLOCATE (sbe_env%ham_kp(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%moments_kp(3, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%overlap_grad(3, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
+      ALLOCATE (sbe_env%current_mo_coeffs(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ! Allocate density matrix
       ALLOCATE (sbe_env%densmat(sbe_env%n_spin, sbe_env%n_ao, &
                 sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
@@ -221,6 +225,7 @@ CONTAINS
       ! Allocate work for diagonalization routines
       ! Get the lwork by workspace query
       ALLOCATE (sbe_env%eigrwork(3*sbe_env%n_ao - 2), source=0.0_dp)
+      ! Execute the workspace query
       CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%ham_zero_kp(1, :, :), &
                  sbe_env%n_ao, sbe_env%overlap_kp(:, :), sbe_env%n_ao, &
                  sbe_env%eigvals, sbe_env%eigvals, -1, sbe_env%eigrwork, info)
@@ -259,7 +264,7 @@ CONTAINS
          END SELECT
       END IF
 
-      ! TODO : Get the phenomenological dephasing time
+      ! Phenomenological dephasing time
       CALL section_vals_val_get(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%DEPHASING_TIME", &
                                 r_val=sbe_env%dephasing_time)
       IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A20,E60.8E3)") &
@@ -267,6 +272,22 @@ CONTAINS
 
       ! Allocate time
       ALLOCATE (sbe_env%time_trace(sbe_env%sim_nsteps - sbe_env%sim_start + 1), source=0.0_dp)
+
+      ! Get the delta-kick configuration
+      sbe_env%apply_delta_pulse = dft_control%rtp_control%apply_delta_pulse
+      sbe_env%delta_pulse_direction(:) = dft_control%rtp_control%delta_pulse_direction(:)
+      sbe_env%delta_pulse_scale = dft_control%rtp_control%delta_pulse_scale
+      ! TODO : Change the scale/direction by cell dimensions? Done in TDDFT... But probably only relevant for length gauge
+      IF (sbe_env%unit_nr > 0) THEN
+         IF (sbe_env%apply_delta_pulse) THEN
+            WRITE (sbe_env%unit_nr, "(A23,L57)") " SBE| Apply delta pulse", .TRUE.
+            WRITE (sbe_env%unit_nr, "(A27,I45,I4,I4)") &
+               " SBE| Delta pulse direction", sbe_env%delta_pulse_direction(:)
+            WRITE (sbe_env%unit_nr, "(A23,E57.3E3)") " SBE| Delta pulse scale", sbe_env%delta_pulse_scale
+         ELSE
+            WRITE (sbe_env%unit_nr, "(A23,L57)") " SBE| Apply delta pulse", .FALSE.
+         END IF
+      END IF
 
       CALL timestop(handle)
    END SUBROUTINE init_sbe_env
@@ -287,6 +308,7 @@ CONTAINS
       DEALLOCATE (sbe_env%overlap_kp)
       DEALLOCATE (sbe_env%inv_overlap_kp)
       DEALLOCATE (sbe_env%overlap_grad)
+      DEALLOCATE (sbe_env%current_mo_coeffs)
 
       DEALLOCATE (sbe_env%ham_zero_rs)
       DEALLOCATE (sbe_env%ham_zero_kp)
