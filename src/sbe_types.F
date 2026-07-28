@@ -85,7 +85,7 @@ MODULE sbe_types
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: time_trace, &
                                                             eigvals, &
                                                             eigrwork
-      REAL(kind=dp), DIMENSION(:,:), ALLOCATABLE         :: occ_numbers
+      COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: occ_numbers
       COMPLEX(kind=dp), DIMENSION(:), ALLOCATABLE        :: eigwork
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: damping, &
                                                             overlap_kp, &
@@ -98,7 +98,8 @@ MODULE sbe_types
                                                             ham_kp, & ! dim 1 : spins, dim 2 : rows, dim 3 : cols
                                                             moments_kp, & ! dim 1 : direction, dim 2 : rows, dim 3 : cols
                                                             overlap_grad ! dim 1 : direction, dim 2 : rows, dim 3 : cols
-      TYPE(section_vals_type), POINTER                   :: field_section
+      TYPE(section_vals_type), POINTER                   :: field_section, &
+                                                            occ_section
    END TYPE sbe_env_type
 
    PUBLIC :: sbe_env_type, &
@@ -148,6 +149,7 @@ CONTAINS
       CALL get_qs_env(qs_env, sab_all=sab_all, para_env=para_env, dft_control=dft_control, cell=cell)
       ! Save the output sections
       sbe_env%field_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%FIELD")
+      sbe_env%occ_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%OCCUPATIONS_MO")
       ! Save dft_control pointer - necessary for make_field during propagation
       sbe_env%dft_control => dft_control
       ! Save cell - need for k-gradient construction during propagation
@@ -243,7 +245,7 @@ CONTAINS
 
       ! Allocate occupation numbers
       ! TODO : Only when output required?
-      ALLOCATE (sbe_env%occ_numbers(sbe_env%n_spin, sbe_env%n_ao), source=0.0_dp)
+      ALLOCATE (sbe_env%occ_numbers(sbe_env%n_spin, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
 
       ! Get the other parameters for the simulation - time, number of steps etc
       CALL section_vals_val_get(force_env%root_section, "MOTION%MD%TIMESTEP", r_val=sbe_env%sim_dt)

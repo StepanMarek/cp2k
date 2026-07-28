@@ -31,6 +31,7 @@ MODULE sbe_methods
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'sbe_methods'
 
    PUBLIC :: init_densmat, &
+             nonherm_metric, &
              get_damping_term, &
              get_convective_term, &
              add_occ_numbers_kp, &
@@ -180,7 +181,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE add_occ_numbers_kp(sbe_env, occ_numbers, densmat, ikp)
       TYPE(sbe_env_type), POINTER, INTENT(IN)               :: sbe_env
-      REAL(kind=dp), DIMENSION(:,:)                         :: occ_numbers ! dim 1 : spin, dim 2 : band
+      COMPLEX(kind=dp), DIMENSION(:,:)                         :: occ_numbers ! dim 1 : spin, dim 2 : band
       COMPLEX(kind=dp), DIMENSION(:,:,:)                    :: densmat ! dim 1 : spin, dim 2 : rows, dim 3 : cols
       INTEGER                                               :: ikp
       INTEGER                                               :: n, info, ispin
@@ -232,15 +233,15 @@ CONTAINS
       INTEGER                                               :: k
 
       ! Start by multiplying field with grad of overlap
-      conv_workspace(:,:) = sbe_env%field(1) * sbe_env%overlap_grad(1,:,:)
+      conv_workspace(:,:) = CMPLX(0.0, -sbe_env%field(1),kind=dp) * sbe_env%overlap_grad(1,:,:)
       DO k=2,3
          conv_workspace(:,:) = conv_workspace(:,:) + &
-            sbe_env%field(k) * sbe_env%overlap_grad(k,:,:)
+            CMPLX(0.0, -sbe_env%field(k),kind=dp) * sbe_env%overlap_grad(k,:,:)
       END DO
       ! ! DEBUG
       ! conv_workspace(:,:) = CMPLX(0.0, 0.0, kind=dp)
       ! Now, multiply by S^(-1) and rho to get
-      ! S^(-1) (E dot grad(S)) rho
+      ! - i S^(-1) (E dot grad(S)) rho
       CALL gemm_square(sbe_env%inv_overlap_kp, 'N', conv_workspace, 'N', densmat, 'N', &
          convective_term)
    END SUBROUTINE get_convective_term
@@ -287,4 +288,31 @@ CONTAINS
 
       CALL timestop(handle)
    END SUBROUTINE add_current_kp
+! **************************************************************************************************
+!> \brief Determines the maximum absolute value of element of 2 times non-Hermitian part of a matrix
+!> \param mat Matrix whose non-Hermitian part is being investigated
+!> \author Stepan Marek
+!> \date 07.2026
+! **************************************************************************************************
+   FUNCTION nonherm_metric(mat) RESULT(max_buffer)
+      COMPLEX(kind=dp), DIMENSION(:,:)                   :: mat
+
+      INTEGER                                            :: i, j, n_ao
+      REAL(kind=dp)                                      :: buffer, max_buffer
+
+      n_ao = SIZE(mat, 1)
+
+      max_buffer = 0.0_dp
+      buffer = 0.0_dp
+
+      DO i=1, n_ao
+         DO j=1,n_ao
+            buffer = ABS(mat(i,j) - CONJG(mat(j,i)))
+            IF (buffer > max_buffer) THEN
+               max_buffer = buffer
+            END IF
+         END DO
+      END DO
+
+   END FUNCTION nonherm_metric
 END MODULE sbe_methods

@@ -29,13 +29,16 @@ MODULE sbe
    USE cp_log_handling,                ONLY: cp_logger_get_default_io_unit
    USE message_passing,                ONLY: mp_para_env_type
    USE sbe_io,                         ONLY: output_field, &
-                                             output_occupation
+                                             output_occupation_file, &
+                                             print_mat, &
+                                             output_nonherm_metric
    USE sbe_utils,                      ONLY: print_sbe_header_info
    USE sbe_types,                      ONLY: sbe_env_type, &
                                              init_sbe_env, &
                                              release_sbe_env, &
                                              get_moments_rs_dbcsr
    USE sbe_methods,                    ONLY: init_densmat, &
+                                             nonherm_metric, &
                                              get_damping_term, &
                                              get_convective_term, &
                                              add_occ_numbers_kp, &
@@ -53,6 +56,11 @@ MODULE sbe
    USE kpoint_k_r_trafo_simple,        ONLY: replicate_rs_matrices, &
                                              rs_to_kp
    USE cp_control_types,               ONLY: dft_control_type
+   USE cp_log_handling, ONLY: cp_logger_type, &
+                              cp_get_default_logger
+   USE cp_output_handling, ONLY: cp_add_iter_level, &
+                                 cp_rm_iter_level, &
+                                 cp_iterate
    USE physcon,                        ONLY: femtoseconds
    USE mathlib,                        ONLY: invcmat, &
                                              gemm_square
@@ -93,6 +101,7 @@ CONTAINS
       TYPE(sbe_env_type), POINTER                        :: sbe_env
       REAL(kind=dp)                                      :: total_n, lambda
       COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
+      TYPE(cp_logger_type), POINTER                      :: logger
 
       unit_nr = cp_logger_get_default_io_unit()
       IF (unit_nr > 0) CALL print_sbe_header_info(unit_nr)
@@ -210,6 +219,10 @@ CONTAINS
             REAL(sbe_env%delta_pulse_direction(:), kind=dp)
       END IF
 
+      ! RT-schemes typically use "MD" as the iteration level
+      logger => cp_get_default_logger()
+      CALL cp_add_iter_level(logger%iter_info, "MD")
+
       ! Start the actual simulation
       DO i_step=sbe_env%sim_start, sbe_env%sim_nsteps
          ! Update timestep parameters
@@ -257,6 +270,8 @@ CONTAINS
             CALL cp_abort(__LOCATION__, "Failed to propagate the density matrix.")
          END IF
 
+         ! Increment iterations
+         CALL cp_iterate(logger%iter_info, iter_nr=i_step, last=(i_step == sbe_env%sim_nsteps))
          ! Outputs
          ! Sum over the occupation numbers across all ranks
          CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
@@ -271,14 +286,21 @@ CONTAINS
             " SBE| Timestep ", i_step, &
             " time ", sbe_env%sim_time * femtoseconds, " current ", &
             REAL(total_current(1)), REAL(total_current(2)), REAL(total_current(3))
-         CALL output_occupation(sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%unit_nr)
-         CALL output_occupation(1.0_dp - sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%unit_nr)
+         ! Output occupations/vacancies into files
+         CALL output_occupation_file(sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%occ_section, &
+            header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.FALSE.)
+         CALL output_occupation_file(sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%occ_section, &
+            header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.TRUE.)
+         ! Output the Hermiticity violation
+         CALL output_nonherm_metric(sbe_env%densmat_next, sbe_env%unit_nr)
          ! Set the current density matrix for the next step
          sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
          ! Update the vector potential - A(t+dt) = A(t) + E dt
          sbe_env%vector_potential(:) = sbe_env%vector_potential(:) + sbe_env%field * sbe_env%sim_dt
       END DO
 
+      ! Stop iteratons
+      CALL cp_rm_iter_level(logger%iter_info, "MD")
       ! Deallocations
       CALL release_sbe_env(sbe_env)
 
@@ -323,11 +345,9 @@ CONTAINS
          ! Add the convective term
          ! TODO : Maybe move to convective_work/conv_work?
          ! TODO : Only allocate damping term when needed - when allocated, point conv work to damp work?
+         ! DEBUG : Now identically zero, trying to add non-Hermitian dipoles
          CALL get_convective_term(sbe_env, sbe_env%damping, densmat_old, sbe_env%damping_work(1,:,:))
          sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
-         ! ! DEBUG : Printing of k1
-         ! IF (sbe_env%unit_nr > 0) PRINT *, sbe_env%densmat_work(1,:,:)
-         ! IF (sbe_env%unit_nr > 0) PRINT *, sbe_env%densmat_work(1,:,:)
          ! k2 and k3 terms are evaluated at t+Delta t/2 - should recalculate h, S, S^(-1) and field
          ! k2 term
          ! Update the field, mid-point
@@ -450,7 +470,7 @@ CONTAINS
                                                             work
 
       ! S^(-1) h rho(t)
-      CALL gemm_square(inv_overlap, 'N', ham, 'N', densmat, 'N', work)
+      CALL gemm_square(inv_overlap, 'N', ham, 'C', densmat, 'N', work)
       ! rho (t) h S^(-1)
       CALL gemm_square(densmat, 'N', ham, 'N', inv_overlap, 'N', commutator)
 
@@ -504,12 +524,10 @@ CONTAINS
       END DO
       ! With moments in place, construct the effective Hamiltonian
       DO ispin = 1, sbe_env%n_spin
+         sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_zero_kp(ispin,:,:) - &
          DO j = 1, 3
-            sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_zero_kp(ispin,:,:) - &
-                                      sbe_env%moments_kp(1,:,:) * sbe_env%field(1) - &
-                                      sbe_env%moments_kp(2,:,:) * sbe_env%field(2) - &
-                                      sbe_env%moments_kp(3,:,:) * sbe_env%field(3)
-         END DO
+            sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_kp(ispin, :, :) - &
+               sbe_env%field(j) * sbe_env%moments_kp(j,:,:)
       END DO
    END SUBROUTINE
 END MODULE sbe
