@@ -2037,9 +2037,6 @@ CONTAINS
       CALL section_add_subsection(print_section, print_key)
       CALL section_release(print_key)
 
-      CALL section_add_subsection(section, print_section)
-      CALL section_release(print_section)
-
       ! RTBSE subsection
       NULLIFY (subsection)
       CALL create_rtbse_section(subsection)
@@ -2050,10 +2047,18 @@ CONTAINS
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
+      ! SBE subsection
       NULLIFY (subsection)
       CALL create_sbe_section(subsection)
+      ! SBE PRINT keys
+      CALL create_sbe_print_keys(print_section)
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
+
+      ! Add the print section
+      CALL section_add_subsection(section, print_section)
+      CALL section_release(print_section)
+
 
    END SUBROUTINE create_rtp_section
 ! **************************************************************************************************
@@ -2365,10 +2370,8 @@ CONTAINS
       TYPE(section_type), POINTER                        :: section
 
       TYPE(keyword_type), POINTER                        :: keyword
-      ! TYPE(section_type), POINTER                        :: subsection
 
       NULLIFY (keyword)
-      ! NULLIFY (subsection)
       CPASSERT(.NOT. ASSOCIATED(section))
 
       CALL section_create(section, __LOCATION__, &
@@ -2408,7 +2411,31 @@ CONTAINS
       CALL keyword_release(keyword)
 
    END SUBROUTINE create_sbe_section
+! **************************************************************************************************
+!> \brief Creates the print keys implemented in SBE only (for now) in a print section
+!> \param section Relevant print section
+!> \author Stepan Marek
+!> \date 07.2026
+! **************************************************************************************************
+   SUBROUTINE create_sbe_print_keys(print_section)
+      TYPE(section_type), POINTER                        :: print_section
 
+      TYPE(section_type), POINTER                        :: print_key
+
+      NULLIFY (print_key)
+
+      ! MO occupations
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "OCCUPATIONS_MO", &
+                                       description="Prints the diagonal entries of the density matrix "// &
+                                       "in the MO basis. Also prints vacancies, i.e. 1-occupations.", &
+                                       print_level=high_print_level, common_iter_levels=1, &
+                                       each_iter_names=s2a("MD"), &
+                                       each_iter_values=[1], &
+                                       filename="occupations")
+      CALL section_add_subsection(print_section, print_key)
+      CALL section_release(print_key)
+
+      END SUBROUTINE create_sbe_print_keys
 ! **************************************************************************************************
 !> \brief      Create CP2K input section for the SCCS model
 !> \param section ...
