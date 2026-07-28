@@ -524,10 +524,11 @@ CONTAINS
       END DO
       ! With moments in place, construct the effective Hamiltonian
       DO ispin = 1, sbe_env%n_spin
-         sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_zero_kp(ispin,:,:) - &
+         sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_zero_kp(ispin,:,:)
          DO j = 1, 3
             sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_kp(ispin, :, :) - &
                sbe_env%field(j) * sbe_env%moments_kp(j,:,:)
+         END DO
       END DO
-   END SUBROUTINE
+   END SUBROUTINE update_kp_matrices
 END MODULE sbe
