@@ -314,8 +314,8 @@ CONTAINS
          CALL output_nonherm_metric(sbe_env%densmat_next, sbe_env%unit_nr)
          ! Set the current density matrix for the next step
          sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
-         ! Update the vector potential - A(t+dt) = A(t) + E dt
-         sbe_env%vector_potential(:) = sbe_env%vector_potential(:) + sbe_env%field * sbe_env%sim_dt
+         ! Update the vector potential - A(t+dt) = A(t) - E dt
+         sbe_env%vector_potential(:) = sbe_env%vector_potential(:) - sbe_env%field * sbe_env%sim_dt
       END DO
 
       ! Stop iteratons
@@ -375,8 +375,9 @@ CONTAINS
             CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step, &
                             sbe_env%sim_time + 0.5_dp*sbe_env%sim_dt)
          END IF
-         ! Add to vector potential
-         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + &
+         ! Add to vector potential A(t + dt/2) = A(t) - E(t + dt/2) dt/2
+         ! TODO : Try also standard forward Euler
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
                                        0.5_dp*sbe_env%sim_dt*sbe_env%field_next(:)
          ! Since vector potential changes, update kp matrices
          CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
@@ -418,8 +419,8 @@ CONTAINS
             CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step + 1, &
                             sbe_env%sim_time + sbe_env%sim_dt)
          END IF
-         ! Add to vector potential
-         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + &
+         ! Add to vector potential A(t+dt) = A(t) - E(t) dt
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
                                        sbe_env%sim_dt*sbe_env%field_next(:)
          ! Since vector potential changes, update kp matrices
          ! TODO : Only update a given spin and ikp
@@ -470,7 +471,7 @@ CONTAINS
          ! PRINT *, "SBE| EULER Propagastor - Antiherm. part kp", ikp, nonherm_metric( &
          !    sbe_env%sim_dt * sbe_env%densmat_work(1,:,:))
          ! To remain consistent with RK4 - update the kp-matrices to the next vector potential
-         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + &
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
                                        sbe_env%sim_dt*sbe_env%field(:)
          CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
          info = 0
