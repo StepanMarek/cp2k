@@ -32,6 +32,7 @@ MODULE sbe_methods
 
    PUBLIC :: init_densmat, &
              nonherm_metric, &
+             nonidempot_metric, &
              get_damping_term, &
              get_convective_term, &
              add_occ_numbers_kp, &
@@ -113,6 +114,27 @@ CONTAINS
                        sbe_env%densmat_work(1,:,:), 'C', densmat(:, :))
 
    END SUBROUTINE init_densmat
+! **************************************************************************************************
+!> \brief Pretty prints a complex matrix
+!> \param mat Matrix to be pretty printed
+!> \author Stepan Marek
+!> \date 07.2026
+! **************************************************************************************************
+   SUBROUTINE print_mat(mat)
+      COMPLEX(kind=dp), DIMENSION(:,:) :: mat
+
+      INTEGER :: i,j,m,n
+
+      m = SIZE(mat,1)
+      n = SIZE(mat,2)
+
+      DO i=1,m
+         DO j=1,n-1
+            WRITE (6,"(E15.3E3,E15.3E3)", advance="no") REAL(mat(i,j)),AIMAG(mat(i,j))
+         END DO
+            WRITE (6,"(E15.3E3,E15.3E3)") REAL(mat(i,j)),AIMAG(mat(i,j))
+      END DO
+   END SUBROUTINE print_mat
 
 ! **************************************************************************************************
 !> \brief Determines the damping term using dephasing time, uses damping workspace
@@ -238,8 +260,8 @@ CONTAINS
          conv_workspace(:,:) = conv_workspace(:,:) + &
             CMPLX(0.0, -sbe_env%field(k),kind=dp) * sbe_env%overlap_grad(k,:,:)
       END DO
-      ! ! DEBUG
-      ! conv_workspace(:,:) = CMPLX(0.0, 0.0, kind=dp)
+      ! DEBUG
+      conv_workspace(:,:) = CMPLX(0.0, 0.0, kind=dp)
       ! Now, multiply by S^(-1) and rho to get
       ! - i S^(-1) (E dot grad(S)) rho
       CALL gemm_square(sbe_env%inv_overlap_kp, 'N', conv_workspace, 'N', densmat, 'N', &
@@ -315,4 +337,47 @@ CONTAINS
       END DO
 
    END FUNCTION nonherm_metric
+! **************************************************************************************************
+!> \brief Determines the non-idempotency metric - max abs value of element of mat * S * mat - mat
+!> \param mat Matrix whose non-idempotent part is being investigated
+!> \param smat Overlap matrix for the given basis
+!> \param work Working area, at least 2 matrices
+!> \author Stepan Marek
+!> \date 07.2026
+! **************************************************************************************************
+   FUNCTION nonidempot_metric(mat, smat, work) RESULT(max_buffer)
+      COMPLEX(kind=dp), DIMENSION(:,:)                   :: mat, smat
+      COMPLEX(kind=dp), DIMENSION(:,:,:)                 :: work
+
+      INTEGER                                            :: i, j, n_ao
+      REAL(kind=dp)                                      :: buffer, max_buffer
+
+      n_ao = SIZE(mat, 1)
+
+      max_buffer = 0.0_dp
+      buffer = 0.0_dp
+
+      ! Multiply S * rho * S * rho * S
+      ! S * rho
+      CALL gemm_square(smat, "N", mat, "N", work(1,:,:))
+      ! (S * rho) * S
+      CALL gemm_square(work(1,:,:), "N", smat, "N", work(2,:,:))
+      ! (S * rho * S ) * rho
+      CALL gemm_square(work(2,:,:), "N", mat, "N", work(1,:,:))
+      ! (S * rho * S * rho ) * S
+      CALL gemm_square(work(1,:,:), "N", smat, "N", work(2,:,:))
+
+      ! Multiply S * rho * S
+      CALL gemm_square(smat, "N", mat, "N", smat, "N", work(1,:,:))
+
+      DO i=1, n_ao
+         DO j=1,n_ao
+            buffer = ABS(work(2,i,j) - work(1,i,j))
+            IF (buffer > max_buffer) THEN
+               max_buffer = buffer
+            END IF
+         END DO
+      END DO
+
+   END FUNCTION nonidempot_metric
 END MODULE sbe_methods

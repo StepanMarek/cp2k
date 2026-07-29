@@ -18,7 +18,8 @@ MODULE sbe_io
                                  cp_print_key_finished_output
    USE physcon, ONLY: femtoseconds
    USE rt_propagation_output, ONLY: print_rt_file
-   USE sbe_methods, ONLY: nonherm_metric
+   USE sbe_methods, ONLY: nonherm_metric, &
+                          nonidempot_metric
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -33,6 +34,7 @@ MODULE sbe_io
    PUBLIC :: output_field, &
             output_occupation_file, &
             print_mat, &
+            output_nonidempot_metric, &
             output_nonherm_metric
 
 CONTAINS
@@ -170,8 +172,40 @@ CONTAINS
          END DO
       END DO
       ! Maximum found
-      PRINT "(A28,E52.8E3)", " SBE| Max non-hermitian part", max_buffer
+      IF (unit_nr > 0) WRITE (unit_nr, "(A28,E52.8E3)") " SBE| Max non-hermitian part", max_buffer
    END SUBROUTINE output_nonherm_metric
+! **************************************************************************************************
+!> \brief Outputs the maximum non-idempotent metric among several matrices
+!> \param densmat 3D array, with two last dimensions matrix rows and columns
+!> \param smat overlap matrix
+!> \param work Density matrix workspace, at least 2 matrices
+!> \param unit_nr Number of the output unit (determined elsewhere)
+!> \author Stepan Marek
+!> \date 07.2026
+! **************************************************************************************************
+   SUBROUTINE output_nonidempot_metric(densmat, smat, work, unit_nr)
+      COMPLEX(kind=dp), DIMENSION(:,:,:)                 :: densmat
+      COMPLEX(kind=dp), DIMENSION(:,:)                   :: smat
+      COMPLEX(kind=dp), DIMENSION(:,:,:)                 :: work
+      INTEGER                                            :: unit_nr
+
+      INTEGER                                            :: ispin, i, j, ikp_local, &
+                                                            nspin, n_ao, nkp_local
+      REAL(kind=dp)                                      :: buffer, max_buffer
+
+      nspin = SIZE(densmat, 1)
+      n_ao = SIZE(densmat, 2)
+      buffer = 0.0_dp
+      max_buffer = 0.0_dp
+
+      ! Iterate over all dimensions
+      DO ispin=1, nspin
+         buffer = nonidempot_metric(densmat(ispin,:,:), smat, work)
+         IF (buffer > max_buffer) max_buffer = buffer
+      END DO
+      ! Maximum found
+      WRITE (unit_nr, "(A29,E51.8E3)") " SBE| Max non-idempotent part", max_buffer
+   END SUBROUTINE output_nonidempot_metric
 ! **************************************************************************************************
 !> \brief Pretty prints a complex matrix
 !> \param mat Matrix to be pretty printed

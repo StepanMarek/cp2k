@@ -31,6 +31,7 @@ MODULE sbe
    USE sbe_io,                         ONLY: output_field, &
                                              output_occupation_file, &
                                              print_mat, &
+                                             output_nonidempot_metric, &
                                              output_nonherm_metric
    USE sbe_utils,                      ONLY: print_sbe_header_info
    USE sbe_types,                      ONLY: sbe_env_type, &
@@ -39,6 +40,7 @@ MODULE sbe
                                              get_moments_rs_dbcsr
    USE sbe_methods,                    ONLY: init_densmat, &
                                              nonherm_metric, &
+                                             nonidempot_metric, &
                                              get_damping_term, &
                                              get_convective_term, &
                                              add_occ_numbers_kp, &
@@ -99,7 +101,7 @@ CONTAINS
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                    :: sab_nl
       TYPE(sbe_env_type), POINTER                        :: sbe_env
-      REAL(kind=dp)                                      :: total_n, lambda
+      REAL(kind=dp)                                      :: total_n, lambda, buffer, max_buffer
       COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
       TYPE(cp_logger_type), POINTER                      :: logger
 
@@ -209,6 +211,8 @@ CONTAINS
             CALL init_densmat(sbe_env%densmat(j,:,:,i_local), j, &
                               sbe_env%ham_zero_kp(j,:,:), sbe_env%overlap_kp, &
                               qs_env, sbe_env)
+            ! CALL output_nonidempot_metric(sbe_env%densmat(:,:,:,i_local), sbe_env%overlap_kp, &
+            !    sbe_env%densmat_work, sbe_env%unit_nr)
          END DO
       END DO
 
@@ -246,6 +250,8 @@ CONTAINS
 
          ! Iteration over local kpoints
          ! TODO : Run OMP over local kpoints or not?
+         buffer = 0.0_dp
+         max_buffer = 0.0_dp
          DO i=sbe_env%kpoints%kp_dist(1,sbe_env%mepos), sbe_env%kpoints%kp_dist(2, sbe_env%mepos)
             i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
             ! Recalculate the k-matrices at new kpoints
@@ -253,8 +259,18 @@ CONTAINS
             ! TODO : Maybe implement field current and field next?
             ! TODO : For fields that are no longer changing, stop the update to speed up the simulation? Maybe via metric change?
             CALL update_kp_matrices(sbe_env, i)
+            ! DEBUG : Print the eigenvalues of the inverse overlap matrix
+            sbe_env%densmat_work(1,:,:) = sbe_env%inv_overlap_kp(:,:)
+            sbe_env%densmat_work(2,:,:) = sbe_env%overlap_kp(:,:)
+            CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(1,:,:), &
+                       sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
+                       sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
+            PRINT *, "SBE| S_inv", i_step, i, sbe_env%eigvals
             ! Actual propagation of the density rho(t) -> rho(t+dt)
             DO j=1,sbe_env%n_spin
+               ! Log max idempotency violation in this k-point cycle
+               buffer = nonidempot_metric(sbe_env%densmat(j,:,:,i_local), sbe_env%overlap_kp, sbe_env%densmat_work)
+               IF (buffer > max_buffer) max_buffer = buffer
                CALL propagate_density(sbe_env, sbe_env%densmat(j,:,:,i_local), &
                                       sbe_env%densmat_next(j,:,:,i_local), j, i, info)
             END DO
@@ -269,6 +285,9 @@ CONTAINS
          IF (info > 0) THEN
             CALL cp_abort(__LOCATION__, "Failed to propagate the density matrix.")
          END IF
+
+         ! Idempotency violation
+         PRINT *, " SBE| Idempotency violation", max_buffer
 
          ! Increment iterations
          CALL cp_iterate(logger%iter_info, iter_nr=i_step, last=(i_step == sbe_env%sim_nsteps))
@@ -425,6 +444,10 @@ CONTAINS
             sbe_env%sim_dt * (sbe_env%densmat_work(1,:,:) + 2.0_dp * sbe_env%densmat_work(2,:,:) + &
                2.0_dp * sbe_env%densmat_work(3,:,:) + sbe_env%densmat_work(4,:,:)) / 6.0_dp
          info = 0
+         ! ! DEBUG : Output the anti-hermitian metric of the propagator
+         ! PRINT *, "SBE| RK4 Propagastor - Antiherm. part kp", ikp, nonherm_metric( &
+         !    sbe_env%sim_dt * (sbe_env%densmat_work(1,:,:) + 2.0_dp * sbe_env%densmat_work(2,:,:) + &
+         !    2.0_dp * sbe_env%densmat_work(3,:,:) + sbe_env%densmat_work(4,:,:)) / 6.0_dp)
       ELSE
          ! Matrices are updated from before
          ! Default to forwards Euler
@@ -443,6 +466,9 @@ CONTAINS
          sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
          densmat_new(:,:) = densmat_old(:,:) + &
             sbe_env%sim_dt * sbe_env%densmat_work(1,:,:)
+         ! ! DEBUG : Output the anti-hermitian metric of the propagator
+         ! PRINT *, "SBE| EULER Propagastor - Antiherm. part kp", ikp, nonherm_metric( &
+         !    sbe_env%sim_dt * sbe_env%densmat_work(1,:,:))
          ! To remain consistent with RK4 - update the kp-matrices to the next vector potential
          sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + &
                                        sbe_env%sim_dt*sbe_env%field(:)
