@@ -376,9 +376,9 @@ CONTAINS
                             sbe_env%sim_time + 0.5_dp*sbe_env%sim_dt)
          END IF
          ! Add to vector potential A(t + dt/2) = A(t) - E(t + dt/2) dt/2
-         ! TODO : Try also standard forward Euler
+         ! DEBUG : Try also standard forward Euler
          sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
-                                       0.5_dp*sbe_env%sim_dt*sbe_env%field_next(:)
+                                       0.5_dp*sbe_env%sim_dt*sbe_env%field(:)
          ! Since vector potential changes, update kp matrices
          CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
          CALL propagator_commutator(sbe_env%densmat_work(2,:,:), &
@@ -419,9 +419,9 @@ CONTAINS
             CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step + 1, &
                             sbe_env%sim_time + sbe_env%sim_dt)
          END IF
-         ! Add to vector potential A(t+dt) = A(t) - E(t) dt
+         ! Add to vector potential A(t+dt) = A(t) - E(t+dt) dt
          sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
-                                       sbe_env%sim_dt*sbe_env%field_next(:)
+                                       sbe_env%sim_dt*sbe_env%field(:)
          ! Since vector potential changes, update kp matrices
          ! TODO : Only update a given spin and ikp
          CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
