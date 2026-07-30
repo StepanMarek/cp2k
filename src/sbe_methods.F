@@ -247,23 +247,31 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 01.2025
 ! **************************************************************************************************
-   SUBROUTINE get_convective_term(sbe_env, convective_term, densmat, conv_workspace)
+   SUBROUTINE get_convective_term(sbe_env, convective_term, densmat, conv_workspace, field_opt)
       TYPE(sbe_env_type), POINTER, INTENT(IN)               :: sbe_env
       COMPLEX(kind=dp), DIMENSION(:,:), INTENT(OUT)         :: convective_term, &
                                                                conv_workspace
       COMPLEX(kind=dp), DIMENSION(:,:), INTENT(IN)          :: densmat
       INTEGER                                               :: k
+      REAL(kind=dp), DIMENSION(3), OPTIONAL                 :: field_opt
+      REAL(kind=dp), DIMENSION(3)                           :: field
+
+      IF (PRESENT(field_opt)) THEN
+         field(:) = field_opt(:)
+      ELSE
+         field(:) = sbe_env%field(:)
+      END IF
 
       ! Start by multiplying field with grad of overlap
-      conv_workspace(:,:) = CMPLX(0.0, -sbe_env%field(1),kind=dp) * sbe_env%overlap_grad(1,:,:)
+      conv_workspace(:,:) = CMPLX(-field(1), 0.0,kind=dp) * sbe_env%overlap_grad(1,:,:)
       DO k=2,3
          conv_workspace(:,:) = conv_workspace(:,:) + &
-            CMPLX(0.0, -sbe_env%field(k),kind=dp) * sbe_env%overlap_grad(k,:,:)
+            CMPLX(-field(k), 0.0,kind=dp) * sbe_env%overlap_grad(k,:,:)
       END DO
-      ! DEBUG
-      conv_workspace(:,:) = CMPLX(0.0, 0.0, kind=dp)
+      ! ! DEBUG
+      ! conv_workspace(:,:) = CMPLX(0.0, 0.0, kind=dp)
       ! Now, multiply by S^(-1) and rho to get
-      ! - i S^(-1) (E dot grad(S)) rho
+      ! - S^(-1) (E dot grad(S)) rho
       CALL gemm_square(sbe_env%inv_overlap_kp, 'N', conv_workspace, 'N', densmat, 'N', &
          convective_term)
    END SUBROUTINE get_convective_term
