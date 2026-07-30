@@ -92,7 +92,7 @@ CONTAINS
                                                             i_step, &
                                                             i, &
                                                             i_local, &
-                                                            j, &
+                                                            j, k, &
                                                             info, &
                                                             handle
       ! REAL(kind=dp), DIMENSION(3)                        :: single_k
@@ -259,16 +259,45 @@ CONTAINS
             ! TODO : Maybe implement field current and field next?
             ! TODO : For fields that are no longer changing, stop the update to speed up the simulation? Maybe via metric change?
             CALL update_kp_matrices(sbe_env, i)
-            ! DEBUG : Print the eigenvalues of the inverse overlap matrix
-            sbe_env%densmat_work(1,:,:) = sbe_env%inv_overlap_kp(:,:)
-            sbe_env%densmat_work(2,:,:) = sbe_env%overlap_kp(:,:)
-            CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(1,:,:), &
-                       sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
-                       sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
-            PRINT *, "SBE| S_inv", i_step, i, sbe_env%eigvals
+            ! ! DEBUG : Poll nonherm-metric for d^dagger - d - i grad(S)
+            ! ! x
+            ! DO j=1,sbe_env%n_ao
+            !    DO k=1,sbe_env%n_ao
+            !       sbe_env%densmat_work(1,j,k) = CONJG(sbe_env%moments_kp(1,k,j)) - sbe_env%moments_kp(1,j,k) - &
+            !          CMPLX(0.0, 1.0, kind=dp) * sbe_env%overlap_grad(1,j,k)
+            !    END DO
+            ! END DO
+            ! buffer = nonherm_metric(sbe_env%densmat_work(1,:,:))
+            ! IF (buffer > max_buffer) max_buffer = buffer
+            ! ! y
+            ! DO j=1,sbe_env%n_ao
+            !    DO k=1,sbe_env%n_ao
+            !       sbe_env%densmat_work(1,j,k) = CONJG(sbe_env%moments_kp(2,k,j)) - sbe_env%moments_kp(2,j,k) - &
+            !          CMPLX(0.0, 1.0, kind=dp) * sbe_env%overlap_grad(2,j,k)
+            !    END DO
+            ! END DO
+            ! buffer = nonherm_metric(sbe_env%densmat_work(1,:,:))
+            ! IF (buffer > max_buffer) max_buffer = buffer
+            ! ! z
+            ! DO j=1,sbe_env%n_ao
+            !    DO k=1,sbe_env%n_ao
+            !       sbe_env%densmat_work(1,j,k) = CONJG(sbe_env%moments_kp(3,k,j)) - sbe_env%moments_kp(3,j,k) - &
+            !          CMPLX(0.0, 1.0, kind=dp) * sbe_env%overlap_grad(3,j,k)
+            !    END DO
+            ! END DO
+            ! buffer = nonherm_metric(sbe_env%densmat_work(1,:,:))
+            ! IF (buffer > max_buffer) max_buffer = buffer
+            ! ! DEBUG : Print the eigenvalues of the inverse overlap matrix
+            ! sbe_env%densmat_work(1,:,:) = sbe_env%inv_overlap_kp(:,:)
+            ! sbe_env%densmat_work(2,:,:) = sbe_env%overlap_kp(:,:)
+            ! CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(1,:,:), &
+            !            sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
+            !            sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
+            ! PRINT *, "SBE| S_inv", i_step, i, sbe_env%eigvals
             ! Actual propagation of the density rho(t) -> rho(t+dt)
             DO j=1,sbe_env%n_spin
                ! Log max idempotency violation in this k-point cycle
+               ! DEBUG : Idempotency violation printing
                buffer = nonidempot_metric(sbe_env%densmat(j,:,:,i_local), sbe_env%overlap_kp, sbe_env%densmat_work)
                IF (buffer > max_buffer) max_buffer = buffer
                CALL propagate_density(sbe_env, sbe_env%densmat(j,:,:,i_local), &
@@ -287,7 +316,7 @@ CONTAINS
          END IF
 
          ! Idempotency violation
-         PRINT *, " SBE| Idempotency violation", max_buffer
+         PRINT *, "SBE| Idempotency violation", max_buffer
 
          ! Increment iterations
          CALL cp_iterate(logger%iter_info, iter_nr=i_step, last=(i_step == sbe_env%sim_nsteps))
@@ -497,7 +526,7 @@ CONTAINS
                                                             work
 
       ! S^(-1) h rho(t)
-      CALL gemm_square(inv_overlap, 'N', ham, 'C', densmat, 'N', work)
+      CALL gemm_square(inv_overlap, 'N', ham, 'N', densmat, 'N', work)
       ! rho (t) h S^(-1)
       CALL gemm_square(densmat, 'N', ham, 'N', inv_overlap, 'N', commutator)
 
