@@ -11,6 +11,7 @@
 ! **************************************************************************************************
 MODULE sbe
    USE input_constants,                ONLY: rtp_method_sbe, &
+                                             sbe_propagator_etrs, &
                                              sbe_propagator_rk4
    USE efield_utils,                   ONLY: make_field
    USE force_env_types,                ONLY: force_env_type, &
@@ -43,6 +44,7 @@ MODULE sbe
                                              nonidempot_metric, &
                                              get_damping_term, &
                                              get_convective_term, &
+                                             bch_exp_propagate, &
                                              add_occ_numbers_kp, &
                                              add_current_kp
    USE cp_dbcsr_api,                   ONLY: dbcsr_p_type, &
@@ -120,6 +122,9 @@ CONTAINS
       ! Init the environment
       NULLIFY (sbe_env)
       CALL init_sbe_env(sbe_env, force_env)
+      ! DEBUG : Test the BCH propagation
+      ! sbe_env%propagator_method = sbe_propagator_etrs
+      ! CALL test_bch()
 
       ! Investigate h and S matrices
       CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, &
@@ -378,7 +383,8 @@ CONTAINS
 
       ! TODO : Switch/select for different propagators
       ! RK-4
-      IF (sbe_env%propagator_method == sbe_propagator_rk4) THEN
+      SELECT CASE (sbe_env%propagator_method)
+      CASE (sbe_propagator_rk4)
          ! k1 term
          ! Vector potential is always set from before (previous timestep or delta kick or zero)
          CALL propagator_commutator(sbe_env%densmat_work(1,:,:), &
@@ -478,7 +484,12 @@ CONTAINS
          ! PRINT *, "SBE| RK4 Propagastor - Antiherm. part kp", ikp, nonherm_metric( &
          !    sbe_env%sim_dt * (sbe_env%densmat_work(1,:,:) + 2.0_dp * sbe_env%densmat_work(2,:,:) + &
          !    2.0_dp * sbe_env%densmat_work(3,:,:) + sbe_env%densmat_work(4,:,:)) / 6.0_dp)
-      ELSE
+      CASE (sbe_propagator_etrs)
+         ! DEBUG : Not yet ETRS, just direct BCH, also non-settable args
+         CALL bch_exp_propagate(densmat_new, densmat_old, &
+            sbe_env%inv_overlap_kp, sbe_env%ham_kp(ispin,:,:), sbe_env%sim_dt, 1.0E-14_dp, info, &
+            sbe_env%densmat_work, 50)
+      CASE DEFAULT
          ! Matrices are updated from before
          ! Default to forwards Euler
          CALL propagator_commutator(sbe_env%densmat_work(1,:,:), &
@@ -504,7 +515,7 @@ CONTAINS
                                        sbe_env%sim_dt*sbe_env%field(:)
          CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
          info = 0
-      END IF
+      END SELECT
 
       CALL timestop(handle)
    END SUBROUTINE propagate_density
@@ -526,7 +537,7 @@ CONTAINS
                                                             work
 
       ! S^(-1) h rho(t)
-      CALL gemm_square(inv_overlap, 'N', ham, 'N', densmat, 'N', work)
+      CALL gemm_square(inv_overlap, 'N', ham, 'C', densmat, 'N', work)
       ! rho (t) h S^(-1)
       CALL gemm_square(densmat, 'N', ham, 'N', inv_overlap, 'N', commutator)
 
@@ -587,4 +598,33 @@ CONTAINS
          END DO
       END DO
    END SUBROUTINE update_kp_matrices
+   SUBROUTINE test_bch()
+      COMPLEX(kind=dp), DIMENSION(2,2)          :: densmat_new, densmat_old, hmat, smat
+      COMPLEX(kind=dp), DIMENSION(4,2,2)        :: workspace
+      INTEGER                                   :: converged
+      REAL(kind=dp)                             :: eps, timestep
+
+      densmat_old(:,:) = CMPLX(0.0, 0.0, kind=dp)
+      densmat_old(1,1) = CMPLX(1.0, 0.0, kind=dp)
+      densmat_old(1,2) = CMPLX(0.0, -0.5, kind=dp)
+      densmat_old(2,1) = CMPLX(0.0, 0.5, kind=dp)
+
+      timestep = 0.1_dp
+      eps = 1.0E-10_dp
+
+      smat(:,:) = CMPLX(0.0, 0.0, kind=dp)
+      smat(1,1) = CMPLX(1.0, 0.0, kind=dp)
+      smat(2,2) = CMPLX(1.0, 0.0, kind=dp)
+
+      hmat(:,:) = CMPLX(0.0, 0.0, kind=dp)
+      hmat(1,2) = CMPLX(1.0, 0.0, kind=dp)
+      hmat(2,1) = CMPLX(1.0, 0.0, kind=dp)
+
+      CALL bch_exp_propagate(densmat_new, densmat_old, smat, hmat, timestep, eps, converged, &
+         workspace, 30)
+
+      CALL print_mat(densmat_new)
+
+      CPABORT("EXP test")
+   END SUBROUTINE test_bch
 END MODULE sbe
