@@ -35,6 +35,7 @@ MODULE sbe_methods
              nonidempot_metric, &
              get_damping_term, &
              get_convective_term, &
+             bch_exp_propagate, &
              add_occ_numbers_kp, &
              add_current_kp
 
@@ -268,8 +269,8 @@ CONTAINS
          conv_workspace(:,:) = conv_workspace(:,:) + &
             CMPLX(-field(k), 0.0,kind=dp) * sbe_env%overlap_grad(k,:,:)
       END DO
-      ! ! DEBUG
-      ! conv_workspace(:,:) = CMPLX(0.0, 0.0, kind=dp)
+      ! DEBUG
+      conv_workspace(:,:) = CMPLX(0.0, 0.0, kind=dp)
       ! Now, multiply by S^(-1) and rho to get
       ! - S^(-1) (E dot grad(S)) rho
       CALL gemm_square(sbe_env%inv_overlap_kp, 'N', conv_workspace, 'N', densmat, 'N', &
@@ -388,4 +389,102 @@ CONTAINS
       END DO
 
    END FUNCTION nonidempot_metric
+   FUNCTION abs_metric(mat) RESULT(max_buffer)
+      COMPLEX(kind=dp), DIMENSION(:,:)                      :: mat
+      REAL(kind=dp)                                         :: max_buffer
+
+      INTEGER                                               :: i, j, n_ao
+      REAL(kind=dp)                                         :: buffer
+
+      n_ao = SIZE(mat, 1)
+
+      max_buffer = 0.0_dp
+      buffer = 0.0_dp
+
+      DO i=1, n_ao
+         DO j=1, n_ao
+            buffer = ABS(mat(i,j))
+            IF (buffer > max_buffer) max_buffer = buffer
+         END DO
+      END DO
+   END FUNCTION abs_metric
+! **************************************************************************************************
+!> \brief Produces the effect of the exponential propagation of densmat using hamiltonian and smat
+!> \note Does not assume Hamiltonian Hermiticity, works with Fortran native arrays
+!> \author Stepan Marek
+!> \date 07.2026
+! **************************************************************************************************
+   SUBROUTINE bch_exp_propagate(densmat_new, densmat_old, inv_overlap, hamiltonian, timestep, eps, &
+                                converged, workspace, max_iter_opt)
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(OUT)         :: densmat_new
+      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(IN)          :: densmat_old, &
+                                                               inv_overlap, &
+                                                               hamiltonian
+      REAL(kind=dp), INTENT(IN)                             :: timestep, eps
+      INTEGER, INTENT(OUT)                                  :: converged
+      !COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER, OPTIONAL :: workspace_opt ! Save some time on reallocations
+      COMPLEX(kind=dp), DIMENSION(:,:,:)                    :: workspace ! Save some time on reallocations
+      INTEGER, INTENT(IN), OPTIONAL                         :: max_iter_opt
+      CHARACTER(len=*), PARAMETER                           :: routineN="bch_exp_propagate"
+      INTEGER                                               :: handle, &
+                                                               n_ao, &
+                                                               max_iter, &
+                                                               i
+      ! COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER           :: workspace
+      COMPLEX(kind=dp)                                      :: prefactor
+
+      CALL timeset(routineN, handle)
+
+      n_ao = SIZE(densmat_old, 1)
+
+      converged = 1
+
+      max_iter = 30
+      IF (PRESENT(max_iter_opt)) max_iter = max_iter_opt
+
+      ! IF (PRESENT(workspace_opt)) THEN
+      !    workspace => workspace_opt
+      ! ELSE
+      !    NULLIFY (workspace)
+      !    ALLOCATE (workspace(4, n_ao, n_ao))
+      ! END IF
+
+      ! Store the cumulant in workspace(1,:,:),
+      ! previous commutator in workspace(2,:,:),
+      ! intermediary results in workspace(3,:,:) and workspace(4,:,:)
+ 
+      ! Initialize cummulant
+      ! C_0 (S^-1 H , H^dagger S^-1; rho)
+      workspace(1,:,:) = densmat_old(:,:)
+      ! Initialize commutator
+      workspace(2,:,:) = densmat_old(:,:)
+      prefactor = CMPLX(1.0, 0.0, kind=dp)
+
+      DO i=1, max_iter
+         ! Determine C_i(S^-1 H^dagger, H S^-1; rho)
+         ! as C_1(S^-1 H^dagger, H S^-1); C_(i-1)(S^-1 H^dagger , H S^-1; rho)) =
+         ! = (S^-1 H^dagger C_(i-1) -  C_(i-1) H S^-1)
+         CALL gemm_square(inv_overlap, "N", hamiltonian, "C", workspace(2,:,:), "N", workspace(3,:,:))
+         CALL gemm_square(workspace(2,:,:), "N", hamiltonian, "N", inv_overlap, "N", workspace(4,:,:))
+
+         ! Update the commutator
+         workspace(2,:,:) = workspace(3,:,:) - workspace(4,:,:)
+         ! Update the cummulant
+         prefactor = prefactor * CMPLX(0.0, -timestep/REAL(i, kind=dp), kind=dp)
+         workspace(1,:,:) = workspace(1,:,:) + prefactor * workspace(2,:,:)
+
+         ! If the added term is below the convergence threshold, exit
+         IF (abs_metric(prefactor * workspace(2,:,:)) < eps) THEN
+            converged = 0
+            EXIT
+         END IF
+      END DO
+
+      ! Always copy the best estimate to new matrix, even if not converged
+      densmat_new(:,:) = workspace(1,:,:)
+
+      ! IF (.NOT. PRESENT(workspace_opt)) DEALLOCATE (workspace)
+
+      CALL timestop(handle)
+   END SUBROUTINE bch_exp_propagate
 END MODULE sbe_methods

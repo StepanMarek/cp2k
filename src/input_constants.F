@@ -997,6 +997,7 @@ MODULE input_constants
                                                rtp_bse_kernel_ri_ao = 2
 
    INTEGER, PARAMETER, PUBLIC               :: sbe_propagator_euler = 1, &
+                                               sbe_propagator_etrs = 2, &
                                                sbe_propagator_rk4 = 4
 
    ! how to solve polarizable force fields
