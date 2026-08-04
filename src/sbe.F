@@ -68,6 +68,7 @@ MODULE sbe
    USE physcon,                        ONLY: femtoseconds
    USE mathlib,                        ONLY: invcmat, &
                                              gemm_square
+   USE mathconstants,                  ONLY: twopi
 
 #include "./base/base_uses.f90"
 
@@ -183,6 +184,7 @@ CONTAINS
          sbe_env%field(:) = 0.0_dp
          sbe_env%vector_potential(:) = 0.0_dp
          CALL update_kp_matrices(sbe_env, i)
+         ! DEBUG : Print out dipole matrices
          i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
          CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
                        sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
@@ -196,6 +198,7 @@ CONTAINS
             CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
                        sbe_env%densmat_work(1,:,:), sbe_env%n_ao, &
                        sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
+            ! DEBUG : Print out the bandstructure
             ! Eigenvectors are in densmat_work(2,:,:)
             ! Save the eigenvectors
             sbe_env%current_mo_coeffs(:,:) = sbe_env%densmat_work(2,:,:)
@@ -559,10 +562,13 @@ CONTAINS
       ikp_local = ikp - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
       ! Calculate the xkp based on equilibrium xkp and vector potential
       IF (PRESENT(current_vector_opt)) THEN
-         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) - current_vector_opt(:)
+         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) - &
+            MATMUL(TRANSPOSE(sbe_env%hmat), current_vector_opt(:)) / twopi
       ELSE
-         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) - sbe_env%vector_potential(:)
+         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) - &
+            MATMUL(TRANSPOSE(sbe_env%hmat), sbe_env%vector_potential(:)) / twopi
       END IF
+      ! PRINT *, "SBE| K-point units debug", ikp, sbe_env%kpoints%xkp(:,ikp), xkp_current(:)
       ! Now, with the kpoint coordinate, calculate the matrices
       ! Start with overlap
       CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
