@@ -50,7 +50,7 @@ MODULE input_cp2k_dft
         sccs_fattebert_gygi, sccs_saa_andreussi, sic_ad, sic_eo, sic_list_all, sic_list_unpaired, &
         sic_mauri_spz, sic_mauri_us, sic_none, slater, use_mom_ref_coac, use_mom_ref_com, &
         use_mom_ref_user, use_mom_ref_zero, use_restart_wfn, use_rt_restart, use_scf_wfn, &
-        weight_type_mass, weight_type_unit, sbe_propagator_euler, sbe_propagator_rk4
+        weight_type_mass, weight_type_unit, sbe_propagator_euler, sbe_propagator_rk4, &
         sccs_fattebert_gygi, sic_ad, sic_eo, sic_list_all, sic_list_unpaired, sic_mauri_spz, &
         sic_mauri_us, sic_none, slater, use_mom_ref_coac, use_mom_ref_com, use_mom_ref_user, &
         use_mom_ref_zero, use_restart_wfn, use_rt_restart, use_scf_wfn, weight_type_mass, &
