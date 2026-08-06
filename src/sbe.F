@@ -11,6 +11,7 @@
 ! **************************************************************************************************
 MODULE sbe
    USE input_constants,                ONLY: rtp_method_sbe, &
+                                             use_mom_ref_zero, &
                                              sbe_propagator_etrs, &
                                              sbe_propagator_rk4
    USE efield_utils,                   ONLY: make_field
@@ -43,7 +44,6 @@ MODULE sbe
                                              nonherm_metric, &
                                              nonidempot_metric, &
                                              get_damping_term, &
-                                             get_convective_term, &
                                              bch_exp_propagate, &
                                              add_occ_numbers_kp, &
                                              add_current_kp
@@ -69,6 +69,7 @@ MODULE sbe
    USE mathlib,                        ONLY: invcmat, &
                                              gemm_square
    USE mathconstants,                  ONLY: twopi
+   USE qs_moments,                     ONLY: qs_moment_kpoints
 
 #include "./base/base_uses.f90"
 
@@ -107,6 +108,7 @@ CONTAINS
       REAL(kind=dp)                                      :: total_n, lambda, buffer, max_buffer
       COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
       TYPE(cp_logger_type), POINTER                      :: logger
+      REAL(kind=dp), DIMENSION(:), POINTER               :: ref_custom
 
       unit_nr = cp_logger_get_default_io_unit()
       IF (unit_nr > 0) CALL print_sbe_header_info(unit_nr)
@@ -126,6 +128,9 @@ CONTAINS
       ! DEBUG : Test the BCH propagation
       ! sbe_env%propagator_method = sbe_propagator_etrs
       ! CALL test_bch()
+
+      ! ! DEBUG : Print the dipole moments and the bandstructure
+      ! CALL qs_moment_kpoints(qs_env, 1, use_mom_ref_zero, ref_custom, sbe_env%n_ao, sbe_env%unit_nr)
 
       ! Investigate h and S matrices
       CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, &
@@ -198,7 +203,14 @@ CONTAINS
             CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
                        sbe_env%densmat_work(1,:,:), sbe_env%n_ao, &
                        sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
-            ! DEBUG : Print out the bandstructure
+            ! ! DEBUG : Print out the bandstructure
+            ! IF (sbe_env%unit_nr > 0) WRITE (sbe_env%unit_nr, "(A19)") " SBE| Bandstructure"
+            ! PRINT "(A23,I6,A3,E16.8E2,A3,E16.8E2,A3,E16.8E2)", " SBE| Bandstructure ikp", i, &
+            !    " kx", sbe_env%kpoints%xkp(1,i), " ky", sbe_env%kpoints%xkp(2,i), " kz", sbe_env%kpoints%xkp(3,i)
+            ! DO k=1,sbe_env%n_ao
+            !    PRINT "(A23,I6,A4,I6,A7,E20.8E3)", &
+            !       " SBE| Bandstructure ikp", i, " nmo", k, " energy", REAL(sbe_env%eigvals(k), kind=dp)
+            ! END DO
             ! Eigenvectors are in densmat_work(2,:,:)
             ! Save the eigenvectors
             sbe_env%current_mo_coeffs(:,:) = sbe_env%densmat_work(2,:,:)
@@ -267,41 +279,6 @@ CONTAINS
             ! TODO : Maybe implement field current and field next?
             ! TODO : For fields that are no longer changing, stop the update to speed up the simulation? Maybe via metric change?
             CALL update_kp_matrices(sbe_env, i)
-            ! ! DEBUG : Poll nonherm-metric for d^dagger - d - i grad(S)
-            ! ! x
-            ! DO j=1,sbe_env%n_ao
-            !    DO k=1,sbe_env%n_ao
-            !       sbe_env%densmat_work(1,j,k) = CONJG(sbe_env%moments_kp(1,k,j)) - sbe_env%moments_kp(1,j,k) - &
-            !          CMPLX(0.0, 1.0, kind=dp) * sbe_env%overlap_grad(1,j,k)
-            !    END DO
-            ! END DO
-            ! buffer = nonherm_metric(sbe_env%densmat_work(1,:,:))
-            ! IF (buffer > max_buffer) max_buffer = buffer
-            ! ! y
-            ! DO j=1,sbe_env%n_ao
-            !    DO k=1,sbe_env%n_ao
-            !       sbe_env%densmat_work(1,j,k) = CONJG(sbe_env%moments_kp(2,k,j)) - sbe_env%moments_kp(2,j,k) - &
-            !          CMPLX(0.0, 1.0, kind=dp) * sbe_env%overlap_grad(2,j,k)
-            !    END DO
-            ! END DO
-            ! buffer = nonherm_metric(sbe_env%densmat_work(1,:,:))
-            ! IF (buffer > max_buffer) max_buffer = buffer
-            ! ! z
-            ! DO j=1,sbe_env%n_ao
-            !    DO k=1,sbe_env%n_ao
-            !       sbe_env%densmat_work(1,j,k) = CONJG(sbe_env%moments_kp(3,k,j)) - sbe_env%moments_kp(3,j,k) - &
-            !          CMPLX(0.0, 1.0, kind=dp) * sbe_env%overlap_grad(3,j,k)
-            !    END DO
-            ! END DO
-            ! buffer = nonherm_metric(sbe_env%densmat_work(1,:,:))
-            ! IF (buffer > max_buffer) max_buffer = buffer
-            ! ! DEBUG : Print the eigenvalues of the inverse overlap matrix
-            ! sbe_env%densmat_work(1,:,:) = sbe_env%inv_overlap_kp(:,:)
-            ! sbe_env%densmat_work(2,:,:) = sbe_env%overlap_kp(:,:)
-            ! CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(1,:,:), &
-            !            sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
-            !            sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
-            ! PRINT *, "SBE| S_inv", i_step, i, sbe_env%eigvals
             ! Actual propagation of the density rho(t) -> rho(t+dt)
             DO j=1,sbe_env%n_spin
                ! Log max idempotency violation in this k-point cycle
@@ -351,8 +328,8 @@ CONTAINS
          CALL output_nonherm_metric(sbe_env%densmat_next, sbe_env%unit_nr)
          ! Set the current density matrix for the next step
          sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
-         ! Update the vector potential - A(t+dt) = A(t) - E dt
-         sbe_env%vector_potential(:) = sbe_env%vector_potential(:) - sbe_env%field * sbe_env%sim_dt
+         ! Update the vector potential - A(t+dt) = A(t) - E(t) dt
+         sbe_env%vector_potential(:) = sbe_env%vector_potential(:) - sbe_env%sim_dt * sbe_env%field(:)
       END DO
 
       ! Stop iteratons
@@ -399,13 +376,7 @@ CONTAINS
          ! Add the damping term
          CALL get_damping_term(sbe_env, sbe_env%damping, densmat_old(:,:), ispin)
          sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
-         ! Add the convective term
-         ! TODO : Maybe move to convective_work/conv_work?
-         ! TODO : Only allocate damping term when needed - when allocated, point conv work to damp work?
-         ! DEBUG : Now identically zero, trying to add non-Hermitian dipoles
-         CALL get_convective_term(sbe_env, sbe_env%damping, densmat_old, sbe_env%damping_work(1,:,:))
-         sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
-         ! k2 and k3 terms are evaluated at t+Delta t/2 - should recalculate h, S, S^(-1) and field
+         ! k2 and k3 terms are evaluated at t+Delta t/2 - recalculate h, S, S^(-1) and field
          ! k2 term
          ! Update the field, mid-point
          ! TODO : Sim-step interpolation?
@@ -413,26 +384,22 @@ CONTAINS
             CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step, &
                             sbe_env%sim_time + 0.5_dp*sbe_env%sim_dt)
          END IF
-         ! Add to vector potential A(t + dt/2) = A(t) - E(t + dt/2) dt/2
-         ! DEBUG : Try also standard forward Euler
+         ! Add to vector potential A(t + dt/2) = A(t) - E(t) dt/2
          sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
-                                       0.5_dp*sbe_env%sim_dt*sbe_env%field(:)
+                                       0.5_dp*sbe_env%sim_dt * sbe_env%field(:)
          ! Since vector potential changes, update kp matrices
-         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
+         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, sbe_env%field(:))
+         ! CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
          CALL propagator_commutator(sbe_env%densmat_work(2,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
                                     sbe_env%ham_kp(ispin,:,:), &
                                     densmat_old(:,:) + &
                                     sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(1,:,:), &
                                     densmat_new(:,:))
-         ! Add the non-commutator terms - damping and overlap derivative
+         ! Add the non-commutator terms - damping
          CALL get_damping_term(sbe_env, sbe_env%damping, &
                                densmat_old(:,:) + sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(1,:,:), &
                                ispin)
-         sbe_env%densmat_work(2,:,:) = sbe_env%densmat_work(2,:,:) + sbe_env%damping(:,:)
-         CALL get_convective_term(sbe_env, sbe_env%damping, &
-                               densmat_old(:,:) + sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(1,:,:), &
-                               sbe_env%damping_work(1,:,:))
          sbe_env%densmat_work(2,:,:) = sbe_env%densmat_work(2,:,:) + sbe_env%damping(:,:)
          ! k3 term
          CALL propagator_commutator(sbe_env%densmat_work(3,:,:), &
@@ -446,52 +413,61 @@ CONTAINS
                                densmat_old(:,:) + sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(2,:,:), &
                                ispin)
          sbe_env%densmat_work(3,:,:) = sbe_env%densmat_work(3,:,:) + sbe_env%damping(:,:)
-         CALL get_convective_term(sbe_env, sbe_env%damping, &
-                               densmat_old(:,:) + sbe_env%sim_dt * 0.5_dp * sbe_env%densmat_work(2,:,:), &
-                               sbe_env%damping_work(1,:,:))
-         sbe_env%densmat_work(3,:,:) = sbe_env%densmat_work(3,:,:) + sbe_env%damping(:,:)
-         ! k4 term is evaluated at t+Delta t - should recalculate h, S, S^(-1) and field
+         ! k4 term is evaluated at t+Delta t - recalculate h, S, S^(-1) and field
          ! k4 term
          ! Update the field, final time
          IF (sbe_env%dft_control%apply_efield_field) THEN
             CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step + 1, &
                             sbe_env%sim_time + sbe_env%sim_dt)
          END IF
-         ! Add to vector potential A(t+dt) = A(t) - E(t+dt) dt
+         ! Add to vector potential A(t+dt) = A(t) - E(t) dt
          sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
-                                       sbe_env%sim_dt*sbe_env%field(:)
+                                       sbe_env%sim_dt*sbe_env%field(:) ! Forward
          ! Since vector potential changes, update kp matrices
-         ! TODO : Only update a given spin and ikp
-         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
+         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, sbe_env%field(:))
+         ! CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
          CALL propagator_commutator(sbe_env%densmat_work(4,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
                                     sbe_env%ham_kp(ispin,:,:), &
                                     densmat_old(:,:) + &
                                     sbe_env%sim_dt * sbe_env%densmat_work(3,:,:), &
                                     densmat_new(:,:))
-         ! Add the non-commutator terms - damping and overlap derivative
+         ! Add the non-commutator terms - damping
          CALL get_damping_term(sbe_env, sbe_env%damping, &
                                densmat_old(:,:) + sbe_env%sim_dt * sbe_env%densmat_work(3,:,:), &
                                ispin)
-         sbe_env%densmat_work(4,:,:) = sbe_env%densmat_work(4,:,:) + sbe_env%damping(:,:)
-         CALL get_convective_term(sbe_env, sbe_env%damping, &
-                               densmat_old(:,:) + sbe_env%sim_dt * sbe_env%densmat_work(3,:,:), &
-                               sbe_env%damping_work(1,:,:))
          sbe_env%densmat_work(4,:,:) = sbe_env%densmat_work(4,:,:) + sbe_env%damping(:,:)
          ! Final determination of next step
          densmat_new(:,:) = densmat_old(:,:) + &
             sbe_env%sim_dt * (sbe_env%densmat_work(1,:,:) + 2.0_dp * sbe_env%densmat_work(2,:,:) + &
                2.0_dp * sbe_env%densmat_work(3,:,:) + sbe_env%densmat_work(4,:,:)) / 6.0_dp
+         ! Reset the kp matrices if there are other spins to propagate
+         IF (sbe_env%n_spin > 1 .AND. ispin == 1) THEN
+            CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential, sbe_env%field)
+         END IF
          info = 0
-         ! ! DEBUG : Output the anti-hermitian metric of the propagator
-         ! PRINT *, "SBE| RK4 Propagastor - Antiherm. part kp", ikp, nonherm_metric( &
-         !    sbe_env%sim_dt * (sbe_env%densmat_work(1,:,:) + 2.0_dp * sbe_env%densmat_work(2,:,:) + &
-         !    2.0_dp * sbe_env%densmat_work(3,:,:) + sbe_env%densmat_work(4,:,:)) / 6.0_dp)
       CASE (sbe_propagator_etrs)
-         ! DEBUG : Not yet ETRS, just direct BCH, also non-settable args
-         CALL bch_exp_propagate(densmat_new, densmat_old, &
-            sbe_env%inv_overlap_kp, sbe_env%ham_kp(ispin,:,:), sbe_env%sim_dt, 1.0E-14_dp, info, &
-            sbe_env%densmat_work, 50)
+         ! rho(t + dt/2) = U^dagger[H(t),dt/2] rho(t) U[H(t),dt/2]
+         ! Intermediate result stored in damping
+         CALL bch_exp_propagate(sbe_env%damping, densmat_old, &
+            sbe_env%inv_overlap_kp, sbe_env%ham_kp(ispin,:,:), 0.5_dp * sbe_env%sim_dt, &
+            1.0E-15_dp, info, sbe_env%densmat_work, 50)
+         ! rho(t + dt) = U^dagger[H(t+dt),dt/2] rho(t+dt/2) U[H(t+dt),dt/2]
+         ! Update field and matrices
+         IF (sbe_env%dft_control%apply_efield_field) THEN
+            CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step + 1, &
+                            sbe_env%sim_time + sbe_env%sim_dt)
+         END IF
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
+            sbe_env%sim_dt * sbe_env%field(:)
+         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, &
+            sbe_env%field_next(:))
+         CALL bch_exp_propagate(densmat_new, sbe_env%damping, &
+            sbe_env%inv_overlap_kp, sbe_env%ham_kp(ispin,:,:), 0.5_dp * sbe_env%sim_dt, &
+            1.0E-15_dp, info, sbe_env%densmat_work, 50)
+         IF (sbe_env%n_spin > 1 .AND. ispin == 1) THEN
+            CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential, sbe_env%field)
+         END IF
       CASE DEFAULT
          ! Matrices are updated from before
          ! Default to forwards Euler
@@ -503,20 +479,9 @@ CONTAINS
          ! Add the non-commutator terms - damping and overlap derivative
          CALL get_damping_term(sbe_env, sbe_env%damping, densmat_old(:,:), ispin)
          sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
-         ! Calculate the gradient term -e/hbar S^(-1) (E(t) . nabla(S)) rho
-         ! Use densmat_new as extra workspace
-         CALL get_convective_term(sbe_env, sbe_env%damping, densmat_old, densmat_new)
-         ! Add this term to the derivative (extra minus sign due to charge of electrons)
-         sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
+         ! Propagate
          densmat_new(:,:) = densmat_old(:,:) + &
             sbe_env%sim_dt * sbe_env%densmat_work(1,:,:)
-         ! ! DEBUG : Output the anti-hermitian metric of the propagator
-         ! PRINT *, "SBE| EULER Propagastor - Antiherm. part kp", ikp, nonherm_metric( &
-         !    sbe_env%sim_dt * sbe_env%densmat_work(1,:,:))
-         ! To remain consistent with RK4 - update the kp-matrices to the next vector potential
-         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
-                                       sbe_env%sim_dt*sbe_env%field(:)
-         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next)
          info = 0
       END SELECT
 
@@ -549,11 +514,13 @@ CONTAINS
 ! **************************************************************************************************
 !> \brief Updates kpoint matrices based on the current value of field and vector potential
 ! **************************************************************************************************
-   SUBROUTINE update_kp_matrices(sbe_env, ikp, current_vector_opt)
+   SUBROUTINE update_kp_matrices(sbe_env, ikp, current_vector_opt, field_opt)
       TYPE(sbe_env_type), POINTER, INTENT(INOUT)         :: sbe_env
       INTEGER, INTENT(IN)                                :: ikp
-      REAL(kind=dp), DIMENSION(3), OPTIONAL              :: current_vector_opt
-      REAL(kind=dp), DIMENSION(3)                        :: xkp_current
+      REAL(kind=dp), DIMENSION(3), OPTIONAL              :: current_vector_opt, &
+                                                            field_opt
+      REAL(kind=dp), DIMENSION(3)                        :: xkp_current, &
+                                                            field
       INTEGER                                            :: ikp_local, &
                                                             info, &
                                                             ispin, &
@@ -568,7 +535,12 @@ CONTAINS
          xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) - &
             MATMUL(TRANSPOSE(sbe_env%hmat), sbe_env%vector_potential(:)) / twopi
       END IF
-      ! PRINT *, "SBE| K-point units debug", ikp, sbe_env%kpoints%xkp(:,ikp), xkp_current(:)
+      ! Determine the field
+      IF (PRESENT(field_opt)) THEN
+         field(:) = field_opt(:)
+      ELSE
+         field(:) = sbe_env%field(:)
+      END IF
       ! Now, with the kpoint coordinate, calculate the matrices
       ! Start with overlap
       CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_kp(:,:), &
@@ -600,7 +572,7 @@ CONTAINS
          sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_zero_kp(ispin,:,:)
          DO j = 1, 3
             sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_kp(ispin, :, :) - &
-               sbe_env%field(j) * sbe_env%moments_kp(j,:,:)
+               field(j) * sbe_env%moments_kp(j,:,:)
          END DO
       END DO
    END SUBROUTINE update_kp_matrices

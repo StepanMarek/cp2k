@@ -269,8 +269,6 @@ CONTAINS
          conv_workspace(:,:) = conv_workspace(:,:) + &
             CMPLX(-field(k), 0.0,kind=dp) * sbe_env%overlap_grad(k,:,:)
       END DO
-      ! DEBUG
-      conv_workspace(:,:) = CMPLX(0.0, 0.0, kind=dp)
       ! Now, multiply by S^(-1) and rho to get
       ! - S^(-1) (E dot grad(S)) rho
       CALL gemm_square(sbe_env%inv_overlap_kp, 'N', conv_workspace, 'N', densmat, 'N', &
