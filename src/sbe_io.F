@@ -12,6 +12,7 @@
 MODULE sbe_io
    USE kinds, ONLY: dp
    USE input_section_types, ONLY: section_vals_type
+   USE kpoint_types, ONLY: kpoint_type
    USE cp_log_handling, ONLY: cp_logger_type, &
                               cp_get_default_logger
    USE cp_output_handling, ONLY: cp_print_key_unit_nr, &
@@ -35,6 +36,7 @@ MODULE sbe_io
             output_occupation_file, &
             print_mat, &
             output_nonidempot_metric, &
+            gather_occupations, &
             output_nonherm_metric
 
 CONTAINS
@@ -227,4 +229,30 @@ CONTAINS
             WRITE (6,"(E15.3E3,E15.3E3)") REAL(mat(i,j)),AIMAG(mat(i,j))
       END DO
    END SUBROUTINE print_mat
+! **************************************************************************************************
+!> \brief Gathers the k-point resolved occupations from different MPI ranks
+!> \param local_occupations Array of local occupations
+!> \param occupations Memory allocated on IO rank only, where all the occupations are gathered
+!> \param kpoints Kpoint type, which holds the distribution information
+!> \param ispin Spin index, defaults to 1 (closed shell case)
+!> \author Stepan Marek
+!> \date 08.2026
+! **************************************************************************************************
+   SUBROUTINE gather_occupations(local_occupations, occupations, kpoints, ispin_opt)
+      COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER        :: local_occupations ! spin,band,kpoint
+      COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER        :: occupations
+      TYPE(kpoint_type), POINTER                         :: kpoints
+      INTEGER, OPTIONAL                                  :: ispin_opt
+      INTEGER                                            :: mepos, &
+                                                            ispin, &
+                                                            ikp_min, &
+                                                            ikp_max
+      ispin = 1
+      IF (PRESENT(ispin_opt)) ispin = ispin_opt
+
+      CALL kpoints%para_env%gather( &
+         local_occupations(ispin,:,:), &
+         occupations(ispin, :, :) &
+      )
+   END SUBROUTINE gather_occupations
 END MODULE sbe_io

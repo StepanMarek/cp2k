@@ -86,6 +86,8 @@ MODULE sbe_types
                                                             eigvals, &
                                                             eigrwork
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: occ_numbers
+      COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER        :: band_occupations => NULL(), &
+                                                            gathered_occupations => NULL()
       COMPLEX(kind=dp), DIMENSION(:), ALLOCATABLE        :: eigwork
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: damping, &
                                                             overlap_kp, &
@@ -182,13 +184,14 @@ CONTAINS
             ! Abort - unknown kpoint scheme
             CALL cp_abort(__LOCATION__, "Unknown kpoint scheme in SBE!")
       END SELECT
-      ! TODO : Get the kpoint distribution (unless too hard, then just use modulos)
+      ! Get the kpoint distribution
       CALL sbe_create_kpoint_dist(sbe_env%kpoints, efficiency)
       sbe_env%mepos = sbe_env%kpoints%para_env%mepos + 1
       sbe_env%local_nkp = sbe_env%kpoints%kp_dist(2, sbe_env%mepos) - &
                           sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
       logger => cp_get_default_logger()
       sbe_env%unit_nr = cp_logger_get_default_io_unit(logger)
+      ! Print info about kpoint distribution efficiency
       IF (sbe_env%unit_nr > 0) THEN
          WRITE (sbe_env%unit_nr, "(A36,F42.2,A2)") " SBE| Kpoint work balance efficiency", 100.0_dp * efficiency, " %"
          DO i=1, sbe_env%kpoints%para_env%num_pe
@@ -206,6 +209,19 @@ CONTAINS
       ALLOCATE (sbe_env%ham_zero_rs(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
       ALLOCATE (sbe_env%moments_rs(3, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
 
+      ! Allocate space for k-resolved occupations
+      ! Need local occupation storage on all ranks
+      ! TODO : Might need to do some memory tricks for unequal kpoint distribution
+      ALLOCATE (sbe_env%band_occupations(sbe_env%n_spin, sbe_env%n_ao, sbe_env%local_nkp), &
+         source=CMPLX(0.0, 0.0, kind=dp))
+      IF (sbe_env%unit_nr > 0) THEN
+         ! On source, need large gather storage
+         ALLOCATE (sbe_env%gathered_occupations(sbe_env%n_spin, sbe_env%n_ao, sbe_env%kpoints%nkp), &
+            source=CMPLX(0.0, 0.0, kind=dp))
+      ELSE
+         ! Allocate empty gather storage, needed for functional gather
+         ALLOCATE (sbe_env%gathered_occupations(0,0,0))
+      END IF
       ! Allocate k-matrices
       ALLOCATE (sbe_env%overlap_kp(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%inv_overlap_kp(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
@@ -315,6 +331,9 @@ CONTAINS
       DEALLOCATE (sbe_env%ham_zero_rs)
       DEALLOCATE (sbe_env%ham_zero_kp)
       DEALLOCATE (sbe_env%ham_kp)
+
+      DEALLOCATE (sbe_env%band_occupations)
+      DEALLOCATE (sbe_env%gathered_occupations)
 
       DEALLOCATE (sbe_env%moments_rs)
       DEALLOCATE (sbe_env%moments_kp)
