@@ -34,6 +34,7 @@ MODULE sbe
                                              output_occupation_file, &
                                              print_mat, &
                                              output_nonidempot_metric, &
+                                             gather_occupations, &
                                              output_nonherm_metric
    USE sbe_utils,                      ONLY: print_sbe_header_info
    USE sbe_types,                      ONLY: sbe_env_type, &
@@ -131,6 +132,25 @@ CONTAINS
 
       ! ! DEBUG : Print the dipole moments and the bandstructure
       ! CALL qs_moment_kpoints(qs_env, 1, use_mom_ref_zero, ref_custom, sbe_env%n_ao, sbe_env%unit_nr)
+
+      ! ! DEBUG : Testing the MPI gather
+      ! DO i=sbe_env%kpoints%kp_dist(1, sbe_env%mepos), sbe_env%kpoints%kp_dist(2,sbe_env%mepos)
+      !    i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
+      !    DO j=1,sbe_env%n_ao
+      !       sbe_env%band_occupations(1,j,i_local) = CMPLX(i, j, kind=dp)
+      !    END DO
+      ! END DO
+
+      ! ! Do the actual test
+      ! CALL gather_occupations(sbe_env%band_occupations, sbe_env%gathered_occupations, sbe_env%kpoints)
+      ! IF (sbe_env%unit_nr > 0) THEN
+      !    ! Print gathered
+      !    DO i=1, sbe_env%kpoints%nkp
+      !       DO j=1, sbe_env%n_ao
+      !          PRINT *, "SBE| Gather test", j, i, sbe_env%gathered_occupations(1,j,i)
+      !       END DO
+      !    END DO
+      ! END IF
 
       ! Investigate h and S matrices
       CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, &
