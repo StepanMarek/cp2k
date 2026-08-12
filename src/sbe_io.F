@@ -285,6 +285,7 @@ CONTAINS
                                                             occ_unit
       CHARACTER(len=20), DIMENSION(:), ALLOCATABLE       :: headers
       LOGICAL                                            :: do_headers
+      REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: xvals
 
       CALL timeset(routineN, handle)
 
@@ -306,20 +307,35 @@ CONTAINS
 
       occ_unit = cp_print_key_unit_nr(logger, sbe_env%occ_kp_section, extension=".dat")
 
-      ! Prepare the headers
-      ALLOCATE (headers(n_ao * nkp + 1))
-      headers(1) = "#          Time [fs]"
-      DO ikp=1, nkp
+      IF (do_headers) THEN
+         ! Prepare the headers
+         ALLOCATE (headers(n_ao + 1))
+         headers(1) = "#                ikp"
          DO iband=1, n_ao
-            WRITE (headers((ikp - 1) * n_ao + iband + 1), "(A5,I6,A4,I5)") &
-               " ikp=", ikp, " mo=", iband
+            WRITE (headers(iband + 1), "(A14,I6)") &
+               "     occ. band", iband
          END DO
-      END DO
+      END IF
 
+      ALLOCATE (xvals(nkp), source=REAL(0.0, kind=dp))
+      DO ikp=1, nkp
+         xvals(ikp) = REAL(ikp, kind=dp)
+      END DO
       ! Print the reshaped array
-      IF (occ_unit > 0) CALL print_rt_file(occ_unit, xvals=[sbe_env%sim_time], &
-         yvals=RESHAPE(gathered_occupations(ispin, :, :), [n_ao * nkp, 1]), &
-         headers=headers, xscale_opt=femtoseconds, comp_opt=rt_file_comp_real)
+      ! DEBUG : spin
+      ispin = 1
+      IF (do_headers) THEN
+         IF (occ_unit > 0) CALL print_rt_file(occ_unit, xvals=xvals, &
+            yvals=gathered_occupations(ispin, :, :), &
+            headers=headers, comp_opt=rt_file_comp_real)
+         DEALLOCATE (headers)
+      ELSE
+         IF (occ_unit > 0) CALL print_rt_file(occ_unit, xvals=xvals, &
+            yvals=gathered_occupations(ispin, :, :), &
+            comp_opt=rt_file_comp_real)
+      END IF
+
+      DEALLOCATE (xvals)
 
       CALL timestop(handle)
    END SUBROUTINE output_occupations_kp_file
