@@ -18,9 +18,11 @@ MODULE sbe_io
    USE cp_output_handling, ONLY: cp_print_key_unit_nr, &
                                  cp_print_key_finished_output
    USE physcon, ONLY: femtoseconds
-   USE rt_propagation_output, ONLY: print_rt_file
+   USE rt_propagation_output, ONLY: print_rt_file, &
+                                    rt_file_comp_real
    USE sbe_methods, ONLY: nonherm_metric, &
                           nonidempot_metric
+   USE sbe_types, ONLY: sbe_env_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -34,6 +36,7 @@ MODULE sbe_io
 
    PUBLIC :: output_field, &
             output_occupation_file, &
+            output_occupations_kp_file, &
             print_mat, &
             output_nonidempot_metric, &
             gather_occupations, &
@@ -255,4 +258,69 @@ CONTAINS
          occupations(ispin, :, :) &
       )
    END SUBROUTINE gather_occupations
+! **************************************************************************************************
+!> \brief Gathers the k-point resolved occupations from different MPI ranks and prints them to file
+!> \param sbe_env SBE Environment (for parameters only)
+!> \param local_occupations Explicitly passed local occupations, which are gathered on source rank
+!> \param gathered_occupations Array of occupations at all kpoints, only valid on source rank
+!> \author Stepan Marek
+!> \date 08.2026
+! **************************************************************************************************
+   SUBROUTINE output_occupations_kp_file(sbe_env, local_occupations, gathered_occupations, headers_opt)
+      TYPE(sbe_env_type), INTENT(IN)                     :: sbe_env
+      COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER, &
+         INTENT(IN)                                      :: local_occupations
+      COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER, &
+         INTENT(OUT)                                     :: gathered_occupations
+      LOGICAL, OPTIONAL, INTENT(IN)                      :: headers_opt
+      CHARACTER(len=*), PARAMETER                        :: routineN = "output_occupations_kp_file"
+      TYPE(cp_logger_type), POINTER                      :: logger
+      INTEGER                                            :: handle, &
+                                                            ispin, &
+                                                            n_spin, &
+                                                            ikp, &
+                                                            nkp, &
+                                                            iband, &
+                                                            n_ao, &
+                                                            occ_unit
+      CHARACTER(len=20), DIMENSION(:), ALLOCATABLE       :: headers
+      LOGICAL                                            :: do_headers
+
+      CALL timeset(routineN, handle)
+
+      n_spin = sbe_env%n_spin
+      nkp = sbe_env%kpoints%nkp
+      n_ao = sbe_env%n_ao
+      do_headers = .FALSE.
+      IF (PRESENT(headers_opt)) do_headers = headers_opt
+      ! Do matrix gather for each spin channel
+      DO ispin=1, n_spin
+         CALL sbe_env%kpoints%para_env%gather( &
+            local_occupations(ispin, :, :), &
+            gathered_occupations(ispin, :, :) &
+         )
+      END DO
+
+      ! Open the file
+      logger => cp_get_default_logger()
+
+      occ_unit = cp_print_key_unit_nr(logger, sbe_env%occ_kp_section, extension=".dat")
+
+      ! Prepare the headers
+      ALLOCATE (headers(n_ao * nkp + 1))
+      headers(1) = "#          Time [fs]"
+      DO ikp=1, nkp
+         DO iband=1, n_ao
+            WRITE (headers((ikp - 1) * n_ao + iband + 1), "(A5,I6,A4,I5)") &
+               " ikp=", ikp, " mo=", iband
+         END DO
+      END DO
+
+      ! Print the reshaped array
+      IF (occ_unit > 0) CALL print_rt_file(occ_unit, xvals=[sbe_env%sim_time], &
+         yvals=RESHAPE(gathered_occupations(ispin, :, :), [n_ao * nkp, 1]), &
+         headers=headers, xscale_opt=femtoseconds, comp_opt=rt_file_comp_real)
+
+      CALL timestop(handle)
+   END SUBROUTINE output_occupations_kp_file
 END MODULE sbe_io

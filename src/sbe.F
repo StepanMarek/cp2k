@@ -35,6 +35,7 @@ MODULE sbe
                                              print_mat, &
                                              output_nonidempot_metric, &
                                              gather_occupations, &
+                                             output_occupations_kp_file, &
                                              output_nonherm_metric
    USE sbe_utils,                      ONLY: print_sbe_header_info
    USE sbe_types,                      ONLY: sbe_env_type, &
@@ -301,12 +302,32 @@ CONTAINS
             CALL update_kp_matrices(sbe_env, i)
             ! Actual propagation of the density rho(t) -> rho(t+dt)
             DO j=1,sbe_env%n_spin
+               ! TODO : Only do C(k) calculations when needed -- probably separater routine from update_kp_matrices, or option there
+               sbe_env%densmat_work(1,:,:) = sbe_env%overlap_kp(:, :)
+               sbe_env%densmat_work(2,:,:) = sbe_env%ham_zero_kp(j,:, :)
+               CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
+                          sbe_env%densmat_work(1,:,:), sbe_env%n_ao, &
+                          sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
+               sbe_env%current_mo_coeffs(:,:) = sbe_env%densmat_work(2,:,:)
                ! Log max idempotency violation in this k-point cycle
                ! DEBUG : Idempotency violation printing
                buffer = nonidempot_metric(sbe_env%densmat(j,:,:,i_local), sbe_env%overlap_kp, sbe_env%densmat_work)
                IF (buffer > max_buffer) max_buffer = buffer
                CALL propagate_density(sbe_env, sbe_env%densmat(j,:,:,i_local), &
                                       sbe_env%densmat_next(j,:,:,i_local), j, i, info)
+               ! Determine the k-resolved occupations and save them
+               CALL gemm_square(sbe_env%current_mo_coeffs, "C", sbe_env%overlap_kp, "N", &
+                  sbe_env%densmat_work(1,:,:))
+               CALL gemm_square(sbe_env%densmat_work(1,:,:), "N", sbe_env%densmat_next(j,:,:,i_local), "N", &
+                  sbe_env%densmat_work(2,:,:))
+               CALL gemm_square(sbe_env%densmat_work(2,:,:), "N", sbe_env%overlap_kp, "N", &
+                  sbe_env%densmat_work(1,:,:))
+               CALL gemm_square(sbe_env%densmat_work(1,:,:), "N", sbe_env%current_mo_coeffs(:,:), "N", &
+                  sbe_env%densmat_work(2,:,:))
+               ! TODO : Different number of bands?
+               DO k=1, sbe_env%n_ao
+                  sbe_env%band_occupations(j, k, i_local) = sbe_env%densmat_work(2,k,k)
+               END DO
             END DO
             ! Export observables
             ! Per-kpoint operations - add occ_numbers
@@ -344,6 +365,8 @@ CONTAINS
             header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.FALSE.)
          CALL output_occupation_file(sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%occ_section, &
             header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.TRUE.)
+         CALL output_occupations_kp_file(sbe_env, sbe_env%band_occupations, sbe_env%gathered_occupations, &
+            headers_opt = (i_step == sbe_env%sim_start_orig))
          ! Output the Hermiticity violation
          CALL output_nonherm_metric(sbe_env%densmat_next, sbe_env%unit_nr)
          ! Set the current density matrix for the next step

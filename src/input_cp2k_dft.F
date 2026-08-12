@@ -2435,6 +2435,18 @@ CONTAINS
       CALL section_add_subsection(print_section, print_key)
       CALL section_release(print_key)
 
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "OCCUPATIONS_KP", &
+         description="Prints the k-resolved bands as function of time. Stores them in a wide text file "// &
+         "-- file has a column for each kpoint-band combination "// &
+         "(so for 10x10x10 kpoint mesh with 6 bands, 6000 columns are present). Each row corresponds to "// &
+         "a time step snapshot.", &
+         print_level=high_print_level, common_iter_levels=1, &
+         each_iter_names=s2a("MD"), &
+         each_iter_values=[1], &
+         filename="occupations_kp")
+      CALL section_add_subsection(print_section, print_key)
+      CALL section_release(print_key)
+
       END SUBROUTINE create_sbe_print_keys
 ! **************************************************************************************************
 !> \brief      Create CP2K input section for the SCCS model
