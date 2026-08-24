@@ -28,6 +28,7 @@ MODULE sbe_types
    USE cell_types, ONLY: cell_type
    USE input_section_types, ONLY: section_vals_type, &
                                   section_vals_get_subs_vals, &
+                                  section_vals_get, &
                                   section_vals_val_get
    USE post_scf_bandstructure_utils, ONLY: compute_xkp
    USE qs_moments, ONLY: build_local_moment_matrix_rs_img
@@ -55,6 +56,8 @@ MODULE sbe_types
       INTEGER                                            :: local_nkp = 1, &
                                                             mepos = 0
       TYPE(dft_control_type), POINTER                    :: dft_control => NULL()
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+              POINTER                                    :: sab_all => NULL()
       REAL(kind=dp), DIMENSION(:,:,:,:), ALLOCATABLE     :: overlap_rs, &
                                                             ham_zero_rs, &! dim 1 : spins, dim 2 : rows, dim 3 : cols, dim 4 : images
                                                             moments_rs
@@ -125,18 +128,17 @@ CONTAINS
                                                             i, &
                                                             info
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-              POINTER                                    :: sab_all!, &
-                                                            !sab_kp
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_s_kp, &
                                                             matrix_ks_kp
       TYPE(cell_type), POINTER                           :: cell
       TYPE(section_vals_type), POINTER                   :: kpoint_section, &
-                                                            force_input
+                                                            force_input, &
+                                                            hfx_section
       REAL(kind=dp)                                      :: efficiency
       TYPE(cp_logger_type), POINTER                      :: logger
+      LOGICAL                                            :: do_hfx
 
       CALL timeset(routineN, handle)
 
@@ -149,7 +151,15 @@ CONTAINS
 
       ! Start with kpoints allocation
       CALL force_env_get(force_env, qs_env=qs_env, input=force_input)
-      CALL get_qs_env(qs_env, sab_all=sab_all, para_env=para_env, dft_control=dft_control, cell=cell)
+      CALL get_qs_env(qs_env, para_env=para_env, dft_control=dft_control, cell=cell)
+      ! If kp_hfx, use sab_kp_nosym, otherwise use sab_all
+      hfx_section => section_vals_get_subs_vals(force_input, "DFT%XC%HF")
+      CALL section_vals_get(hfx_section, explicit=do_hfx)
+      IF ( do_hfx ) THEN
+         CALL get_qs_env(qs_env, sab_kp_nosym=sbe_env%sab_all)
+      ELSE
+         CALL get_qs_env(qs_env, sab_all=sbe_env%sab_all)
+      END IF
       ! Save the output sections
       sbe_env%field_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%FIELD")
       sbe_env%occ_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%OCCUPATIONS_MO")
@@ -160,7 +170,7 @@ CONTAINS
       sbe_env%hmat = cell%hmat
 
       CALL kpoint_create(sbe_env%kpoints)
-      CALL kpoint_init_cell_index(sbe_env%kpoints, sab_all, para_env, sbe_env%n_images)
+      CALL kpoint_init_cell_index(sbe_env%kpoints, sbe_env%sab_all, para_env, sbe_env%n_images)
       sbe_env%kpoints%para_env => para_env
       CALL para_env%retain()
 
@@ -425,9 +435,11 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 01.2026
 ! **************************************************************************************************
-   SUBROUTINE get_moments_rs_dbcsr(qs_env, moments)
+   SUBROUTINE get_moments_rs_dbcsr(qs_env, moments, sab_all)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: moments
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+              POINTER                                    :: sab_all
       CHARACTER(len=*), PARAMETER                        :: routineN="get_moments_rs_dbcsr"
       INTEGER                                            :: handle, &
                                                             ref_type
@@ -449,7 +461,7 @@ CONTAINS
       CALL get_reference_point(ref_point, qs_env=qs_env, reference=ref_type, ref_point=ref_custom)
 
       ! With the given reference point, call the moment function
-      CALL build_local_moment_matrix_rs_img(qs_env, moments, ref_point)
+      CALL build_local_moment_matrix_rs_img(qs_env, moments, ref_point, sab_all)
 
       CALL timestop(handle)
    END SUBROUTINE get_moments_rs_dbcsr

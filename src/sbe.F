@@ -184,7 +184,7 @@ CONTAINS
       ! TODO : Check dependence on reference point, also in RTBSE
       NULLIFY (moments_rs_img)
       ALLOCATE (moments_rs_img(3, sbe_env%n_images))
-      CALL get_moments_rs_dbcsr(qs_env, moments_rs_img)
+      CALL get_moments_rs_dbcsr(qs_env, moments_rs_img, sbe_env%sab_all)
       ! ! DEBUG
       ! CALL dbcsr_print(moments_rs_img(1,2)%matrix)
       CALL replicate_rs_matrices(moments_rs_img, sbe_env%kpoints, &
