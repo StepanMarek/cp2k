@@ -105,6 +105,7 @@ MODULE sbe_types
                                                             overlap_grad ! dim 1 : direction, dim 2 : rows, dim 3 : cols
       TYPE(section_vals_type), POINTER                   :: field_section, &
                                                             occ_kp_section, &
+                                                            ham_rs_restart_section, &
                                                             occ_section
    END TYPE sbe_env_type
 
@@ -165,6 +166,7 @@ CONTAINS
       sbe_env%field_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%FIELD")
       sbe_env%occ_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%OCCUPATIONS_MO")
       sbe_env%occ_kp_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%OCCUPATIONS_KP")
+      sbe_env%ham_rs_restart_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%RESTART_HAM")
       ! Save dft_control pointer - necessary for make_field during propagation
       sbe_env%dft_control => dft_control
       ! Save cell - need for k-gradient construction during propagation

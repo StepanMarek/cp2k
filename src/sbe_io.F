@@ -10,19 +10,22 @@
 !> \date 01.2026
 ! **************************************************************************************************
 MODULE sbe_io
-   USE kinds, ONLY: dp
+   USE kinds, ONLY: dp, &
+                    default_path_length
    USE input_section_types, ONLY: section_vals_type
    USE kpoint_types, ONLY: kpoint_type
    USE cp_log_handling, ONLY: cp_logger_type, &
                               cp_get_default_logger
    USE cp_output_handling, ONLY: cp_print_key_unit_nr, &
-                                 cp_print_key_finished_output
+                                 cp_print_key_finished_output, &
+                                 cp_print_key_generate_filename
    USE physcon, ONLY: femtoseconds
    USE rt_propagation_output, ONLY: print_rt_file, &
                                     rt_file_comp_real
    USE sbe_methods, ONLY: nonherm_metric, &
                           nonidempot_metric
    USE sbe_types, ONLY: sbe_env_type
+   USE cp_files, ONLY: file_exists
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -40,6 +43,8 @@ MODULE sbe_io
             print_mat, &
             output_nonidempot_metric, &
             gather_occupations, &
+            output_ham_rs_restart, &
+            read_ham_rs_restart, &
             output_nonherm_metric
 
 CONTAINS
@@ -339,4 +344,99 @@ CONTAINS
 
       CALL timestop(handle)
    END SUBROUTINE output_occupations_kp_file
+! **************************************************************************************************
+!> \brief Prints the RS KS Hamiltonian into unformatted matrix for restart
+!> \author Stepan Marek
+!> \date 08.2026
+! **************************************************************************************************
+   SUBROUTINE output_ham_rs_restart(restart_section, ham_rs)
+      TYPE(section_vals_type)                            :: restart_section
+      REAL(kind=dp), DIMENSION(:,:,:,:)                  :: ham_rs
+      TYPE(cp_logger_type), POINTER                      :: logger
+      INTEGER                                            :: n_spin, nrows, ncols, n_img, &
+                                                            restart_unit, &
+                                                            i_spin, irow, icol
+
+      logger => cp_get_default_logger()
+      restart_unit = cp_print_key_unit_nr(logger, restart_section, extension=".rs", &
+         file_form="UNFORMATTED", file_position="REWIND")
+      n_spin = SIZE(ham_rs, 1)
+      nrows = SIZE(ham_rs, 2)
+      ncols = SIZE(ham_rs, 3)
+      n_img = SIZE(ham_rs, 4)
+      ! The header contains the dimensions of the stored matrix - n_spin, nrows, ncols, n_img
+      !  - present on all ranks, only io rank writes
+      IF (restart_unit > 0) WRITE (restart_unit) n_spin, nrows, ncols, n_img
+      ! rs matrices are also present on every rank, can output just on the io rank
+      ! Note - records must be less than 2G, since record header is I4 -- TODO : check nimg?
+      ! TODO : Is it worth adding a version integer?
+      IF (restart_unit > 0) THEN
+         DO i_spin=1,n_spin
+            DO irow=1,nrows
+               DO icol=1,ncols
+                  WRITE (restart_unit) ham_rs(i_spin, irow, icol, :)
+               END DO
+            END DO
+         END DO
+      END IF
+      CALL cp_print_key_finished_output(restart_unit, logger, restart_section)
+   END SUBROUTINE output_ham_rs_restart
+   SUBROUTINE read_ham_rs_restart(restart_section, ham_rs, success)
+      TYPE(section_vals_type), POINTER                   :: restart_section
+      REAL(kind=dp), DIMENSION(:,:,:,:)                  :: ham_rs
+      LOGICAL                                            :: success
+      TYPE(cp_logger_type), POINTER                      :: logger
+      CHARACTER(len=default_path_length)                 :: filename
+      INTEGER                                            :: n_spin, nrows, ncols, n_img, &
+                                                            i_spin, irow, icol, &
+                                                            target_n_spin, target_nrows, &
+                                                            target_ncols, target_n_img, &
+                                                            restart_unit
+
+      logger => cp_get_default_logger()
+      success = .TRUE.
+
+      ! Check whether the file exists
+      filename = cp_print_key_generate_filename(logger, restart_section, extension=".rs", &
+         my_local=.FALSE.)
+      IF (.NOT. file_exists(filename)) THEN
+         success=.FALSE.
+         RETURN
+      END IF
+
+      ! The file exists - read header and figure out whether we are compatible
+      restart_unit = cp_print_key_unit_nr(logger, restart_section, extension=".rs", &
+         file_form="UNFORMATTED", file_position="REWIND", file_action="READ")
+
+      target_n_spin = SIZE(ham_rs, 1)
+      target_nrows = SIZE(ham_rs, 2)
+      target_ncols = SIZE(ham_rs, 3)
+      target_n_img = SIZE(ham_rs, 4)
+      ! Check compatibility on io rank only
+      IF (restart_unit > 0) THEN
+         READ (restart_unit) n_spin, nrows, ncols, n_img
+      END IF
+      ! Broadcast to other ranks
+      CALL logger%para_env%bcast(n_spin, logger%para_env%source)
+      CALL logger%para_env%bcast(nrows, logger%para_env%source)
+      CALL logger%para_env%bcast(ncols, logger%para_env%source)
+      CALL logger%para_env%bcast(n_img, logger%para_env%source)
+      ! The comparison is done on all ranks
+      IF (target_n_spin /= n_spin .OR. target_nrows /= nrows .OR. &
+         target_ncols /= ncols .OR. target_n_img /= n_img) THEN
+         success = .FALSE.
+         RETURN
+      END IF
+
+      ! The data should be compatible, proceed with the read on io rank
+      DO i_spin=1,n_spin
+         DO irow=1,nrows
+            DO icol=1,ncols
+               IF (restart_unit > 0) READ (restart_unit) ham_rs(i_spin, irow, icol, :)
+               ! Broadcast to other ranks
+               CALL logger%para_env%bcast(ham_rs(i_spin, irow, icol, :), logger%para_env%source)
+            END DO
+         END DO
+      END DO
+   END SUBROUTINE read_ham_rs_restart
 END MODULE sbe_io
