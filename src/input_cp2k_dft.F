@@ -2410,6 +2410,17 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      ! Simplistic separate k-point setting
+      ! TODO : Separate into a custom section
+      CALL keyword_create(keyword, __LOCATION__, name="KPOINTS", &
+         usage="KPOINTS N_x N_y N_z", &
+         description="Defines Monkhorst-Pack k-point grid of N_x x N_y x N_z points.", &
+         type_of_var=integer_t, &
+         default_i_vals=[1,1,1], &
+         n_var=3)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
    END SUBROUTINE create_sbe_section
 ! **************************************************************************************************
 !> \brief Creates the print keys implemented in SBE only (for now) in a print section
