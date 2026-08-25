@@ -139,6 +139,7 @@ CONTAINS
       REAL(kind=dp)                                      :: efficiency
       TYPE(cp_logger_type), POINTER                      :: logger
       LOGICAL                                            :: do_hfx
+      INTEGER, DIMENSION(:), POINTER                     :: mpack_dim
 
       CALL timeset(routineN, handle)
 
@@ -174,28 +175,40 @@ CONTAINS
       sbe_env%kpoints%para_env => para_env
       CALL para_env%retain()
 
-      ! TODO : Construct the (non-symmetric+full) kpoint grid
       ! Start by getting the info into kpoints
-      ! TODO : Might be best to define a separate kpoint grid from the DFT calculation
-      kpoint_section => section_vals_get_subs_vals(force_input, "DFT%KPOINTS")
-      CALL read_kpoint_section(sbe_env%kpoints, kpoint_section, cell%hmat)
-      SELECT CASE (sbe_env%kpoints%kp_scheme)
-         CASE ("MONKHORST-PACK")
-            ! Calculate the xkp
-            ! TODO : Is any symmetry in kpoints available in non-linear SBE?
-            sbe_env%kpoints%nkp = PRODUCT(sbe_env%kpoints%nkp_grid)
-            ALLOCATE (sbe_env%kpoints%xkp(3,sbe_env%kpoints%nkp), &
-                                          source=0.0_dp)
-            ! The grid is accessible on all the ranks
-            CALL compute_xkp(sbe_env%kpoints%xkp, 1, sbe_env%kpoints%nkp, sbe_env%kpoints%nkp_grid)
-            ALLOCATE (sbe_env%kpoints%wkp(sbe_env%kpoints%nkp))
-            sbe_env%kpoints%wkp(:) = 1.0_dp/REAL(sbe_env%kpoints%nkp, kind=dp)
-         CASE ("GENERAL")
-            ! Already calculated in read_kpoint_section
-         CASE DEFAULT
-            ! Abort - unknown kpoint scheme
-            CALL cp_abort(__LOCATION__, "Unknown kpoint scheme in SBE!")
-      END SELECT
+      ! TODO : More sophisticated options
+      NULLIFY (mpack_dim)
+      CALL section_vals_val_get(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%KPOINTS", &
+         i_vals=mpack_dim)
+      ! Populate the kpoints
+      sbe_env%kpoints%kp_scheme = "MONKHORST-PACK"
+      sbe_env%kpoints%nkp_grid(:) = mpack_dim(:)
+      sbe_env%kpoints%nkp = PRODUCT(mpack_dim)
+      ! Actual coordinates
+      ALLOCATE (sbe_env%kpoints%xkp(3,sbe_env%kpoints%nkp), source=0.0_dp)
+      CALL compute_xkp(sbe_env%kpoints%xkp, 1, sbe_env%kpoints%nkp, sbe_env%kpoints%nkp_grid)
+      ! Equal kpoint weights
+      ALLOCATE (sbe_env%kpoints%wkp(sbe_env%kpoints%nkp))
+      sbe_env%kpoints%wkp(:) = 1.0_dp/REAL(sbe_env%kpoints%nkp, kind=dp)
+      ! kpoint_section => section_vals_get_subs_vals(force_input, "DFT%KPOINTS")
+      ! CALL read_kpoint_section(sbe_env%kpoints, kpoint_section, cell%hmat)
+      ! SELECT CASE (sbe_env%kpoints%kp_scheme)
+      !    CASE ("MONKHORST-PACK")
+      !       ! Calculate the xkp
+      !       ! TODO : Is any symmetry in kpoints available in non-linear SBE?
+      !       sbe_env%kpoints%nkp = PRODUCT(sbe_env%kpoints%nkp_grid)
+      !       ALLOCATE (sbe_env%kpoints%xkp(3,sbe_env%kpoints%nkp), &
+      !                                     source=0.0_dp)
+      !       ! The grid is accessible on all the ranks
+      !       CALL compute_xkp(sbe_env%kpoints%xkp, 1, sbe_env%kpoints%nkp, sbe_env%kpoints%nkp_grid)
+      !       ALLOCATE (sbe_env%kpoints%wkp(sbe_env%kpoints%nkp))
+      !       sbe_env%kpoints%wkp(:) = 1.0_dp/REAL(sbe_env%kpoints%nkp, kind=dp)
+      !    CASE ("GENERAL")
+      !       ! Already calculated in read_kpoint_section
+      !    CASE DEFAULT
+      !       ! Abort - unknown kpoint scheme
+      !       CALL cp_abort(__LOCATION__, "Unknown kpoint scheme in SBE!")
+      ! END SELECT
       ! Get the kpoint distribution
       CALL sbe_create_kpoint_dist(sbe_env%kpoints, efficiency)
       sbe_env%mepos = sbe_env%kpoints%para_env%mepos + 1
