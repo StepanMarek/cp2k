@@ -2458,6 +2458,16 @@ CONTAINS
       CALL section_add_subsection(print_section, print_key)
       CALL section_release(print_key)
 
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "RESTART_HAM", &
+         description="Controls printing of the restart Hamiltonian in SBE, "// &
+         "which allows for skipping of the SCF part before starting the calculation.", &
+         print_level=medium_print_level, common_iter_levels=0, &
+         each_iter_names=s2a("SCF"), &
+         each_iter_values=[1], &
+         filename="restart_ham")
+      CALL section_add_subsection(print_section, print_key)
+      CALL section_release(print_key)
+
       END SUBROUTINE create_sbe_print_keys
 ! **************************************************************************************************
 !> \brief      Create CP2K input section for the SCCS model

@@ -36,6 +36,8 @@ MODULE sbe
                                              output_nonidempot_metric, &
                                              gather_occupations, &
                                              output_occupations_kp_file, &
+                                             output_ham_rs_restart, &
+                                             read_ham_rs_restart, &
                                              output_nonherm_metric
    USE sbe_utils,                      ONLY: print_sbe_header_info
    USE sbe_types,                      ONLY: sbe_env_type, &
@@ -111,6 +113,7 @@ CONTAINS
       COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
       TYPE(cp_logger_type), POINTER                      :: logger
       REAL(kind=dp), DIMENSION(:), POINTER               :: ref_custom
+      LOGICAL                                            :: success
 
       unit_nr = cp_logger_get_default_io_unit()
       IF (unit_nr > 0) CALL print_sbe_header_info(unit_nr)
@@ -179,6 +182,13 @@ CONTAINS
               (1024.0_dp * 1024.0_dp * 1024.0_dp), "GiB"
       CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index, 1)
       CALL replicate_rs_matrices(matrix_h_kp, kpoints, sbe_env%ham_zero_rs, sbe_env%kpoints%cell_to_index)
+      CALL output_ham_rs_restart(sbe_env%ham_rs_restart_section, sbe_env%ham_zero_rs)
+      ! DEBUG : Print the ham_zero_rs just saved
+      PRINT *, sbe_env%mepos, sbe_env%ham_zero_rs(1,1,1,1)
+      ! DEBUG : Reload the saved ham_zero_rs
+      CALL read_ham_rs_restart(sbe_env%ham_rs_restart_section, sbe_env%ham_zero_rs, success)
+      ! DEBUG : Print the ham_zero_rs just loaded
+      PRINT *, sbe_env%mepos, success, sbe_env%ham_zero_rs(1,1,1,1)
 
       ! Generate the moments in RS
       ! TODO : Check dependence on reference point, also in RTBSE
