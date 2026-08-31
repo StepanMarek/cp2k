@@ -64,16 +64,27 @@ CONTAINS
       REAL(kind=dp), DIMENSION(:), POINTER                  :: occupations
       INTEGER                                               :: n_ao, &
                                                                i, &
-                                                               info
+                                                               info, &
+                                                               currel
 
       CALL get_qs_env(qs_env, mos=mos)
 
+      ! Determine occupations based on aufbau -- no need to have mos evaluated
+      currel = 0
       ! TODO : Get rid of sbe_env dependence by providing workspaces?
       ! Diagonalize the hamiltonian with overlap to get the MOs
       n_ao = sbe_env%n_ao
+      NULLIFY (occupations)
+      ALLOCATE (occupations(n_ao), source=0.0_dp)
+      DO i=1,n_ao
+         currel = currel + mos(ispin)%maxocc
+         IF (currel > mos(ispin)%nelectron) EXIT
+         ! TODO: this only works for even number of electrons
+         occupations(i) = mos(ispin)%maxocc
+      END DO
       ! TODO : Sanity checks
       ! Get the occupations from MOS
-      CALL get_mo_set(mos(ispin), occupation_numbers=occupations)
+      ! CALL get_mo_set(mos(ispin), occupation_numbers=occupations)
       ! Copy input matrices
       sbe_env%densmat_work(1,:,:) = smat(:, :)
       sbe_env%densmat_work(2,:,:) = ham(:, :)
