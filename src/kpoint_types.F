@@ -64,6 +64,7 @@ MODULE kpoint_types
    PUBLIC :: kind_rotmat_type
    PUBLIC :: kpoint_sym_type
    PUBLIC :: kpoint_sym_create
+   PUBLIC :: kpoint_set_type
 
 ! **************************************************************************************************
 !> \brief Keeps information about a specific k-point
@@ -223,6 +224,22 @@ MODULE kpoint_types
       TYPE(qs_diis_buffer_type_kp), POINTER   :: scf_diis_buffer => Null()
       TYPE(qs_matrix_pools_type), POINTER     :: mpools_aux_fit => Null()
    END TYPE kpoint_type
+
+! **************************************************************************************************
+!> \brief Holds information about path through the Brillouin zone
+!> \param n_segments     number of path segments, i.e. number of defined special points - 1
+!> \param nkp            number of kpoints per segment
+!> \param xkp            kpoint coordinates - (kx/ky/kz,index within segment,index of segment)
+!> \note So, the dimensions of the xkp array, which is allocated here, are (3,nkp,n_segments)
+!> \author Stepan Marek
+!> \date 08.2026
+! **************************************************************************************************
+   TYPE kpoint_set_type
+      INTEGER                                 :: n_segments = 1
+      INTEGER                                 :: nkp = 1
+      REAL(kind=dp), DIMENSION(:,:,:), &
+         ALLOCATABLE                          :: xkp
+   END TYPE kpoint_set_type
 
 ! **************************************************************************************************
 
