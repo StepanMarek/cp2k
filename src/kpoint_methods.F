@@ -108,6 +108,7 @@ MODULE kpoint_methods
    PUBLIC :: kpoint_init_cell_index, kpoint_set_mo_occupation
    PUBLIC :: kpoint_density_matrices, kpoint_density_transform
    PUBLIC :: rskp_transform, lowdin_kp_trans, lowdin_kp_mo_coeff
+   PUBLIC :: read_kpoint_set
 
 ! **************************************************************************************************
 
@@ -2610,5 +2611,91 @@ CONTAINS
 
    END SUBROUTINE matprint
 ! **************************************************************************************************
+!> \brief Reads a KPOINT_SET section, storing the path coordinates organized by path segments
+!> \info So far, does not implement special point naming TODO: special point naming
+!> \param mat ...
+! **************************************************************************************************
+   SUBROUTINE read_kpoint_set(set_section, kp_sets, hmat)
+      TYPE(section_vals_type), POINTER                   :: set_section
+      TYPE(kpoint_set_type), DIMENSION(:), ALLOCATABLE   :: kp_sets
+      REAL(kind=dp), DIMENSION(3,3)                      :: hmat
+
+      INTEGER                                            :: nsets, &
+                                                            iset, &
+                                                            nkp, &
+                                                            n_seg
+      CHARACTER(len=default_string_length)               :: unit_name
+      REAL(kind=dp), DIMENSION(3)                        :: dk
+      REAL(kind=dp), DIMENSION(:), POINTER               :: start_point, &
+                                                            end_point
+      REAL(kind=dp), DIMENSION(3), ALLOCATABLE           :: custom_start
+
+      ! Read the input section, get the number of sets
+      CALL section_vals_get(set_section, n_repetition=nsets)
+      ALLOCATE (kp_sets(nsets))
+      DO iset=1,nsets
+         ! For each set, read the npoints and units - uniform across the set
+         CALL section_vals_val_get(kp_sets, "NPOINTS", i_rep_section=iset, i_val=nkp)
+         kp_sets(iset)%nkp = nkp
+         CALL section_vals_val_get(kp_sets, "UNITS", i_rep_section=iset, c_val=unit_name)
+         ! Now, get the number of segments
+         CALL section_vals_val_get(kp_sets, "SPECIAL_POINT", i_rep_section=iset, n_rep_val=n_seg)
+         IF (n_seg > 1) THEN
+            n_seg = n_seg - 1
+         ELSE IF (n_seg < 1) THEN
+            n_seg = 1
+            nkp = 1
+            ALLOCATE (custom_start(3))
+            ! If no special point defined, assume only Gamma point
+            custom_start(:) = 0.0_dp
+         ELSE
+            nkp = 1
+         END IF
+         kp_sets(iset)%n_segments = n_seg
+         ! Now have all the information to allocate current segment
+         ALLOCATE (kp_sets(iset)%xkp(3,nkp,n_seg)
+         IF (n_seg > 1) THEN
+            ! Iterate through segments
+            DO iseg=1, n_seg
+               ! Find out the dk
+               CALL section_vals_val_get(kp_sets, "SPECIAL_POINT", i_rep_section=iset, &
+                  i_rep_val=iseg, r_vals=start_point)
+               CALL section_vals_val_get(kp_sets, "SPECIAL_POINT", i_rep_section=iset, &
+                  i_rep_val=iseg+1, r_vals=end_point)
+               dk(1:3) = end_point(1:3) - start_point(1:3) / REAL(nkp - 1, kind=dp)
+               ! Multiply by unit matrices, if required
+               SELECT CASE (unit_name)
+                  CASE ("B_VECTOR")
+                     dk(1:3) = dk(1:3)
+                  CASE ("CART_ANGSTROM")
+                     dk(1:3) = (dk1(1)*hmat(1, 1:3) + &
+                                       dk(2)*hmat(2, 1:3) + &
+                                       dk(3)*hmat(3, 1:3))/twopi*angstrom
+                  CASE ("CART_BOHR")
+                     dk(1:3) = (dk1(1)*hmat(1, 1:3) + &
+                                       dk(2)*hmat(2, 1:3) + &
+                                       dk(3)*hmat(3, 1:3))/twopi
+                  CASE DEFAULT
+                     CPABORT("Unknown units in KPOINT_SET")
+               END SELECT
+               kp_sets(iset)%xkp(1:3,1,iseg) = start_point(1:3)
+               DO ikp=1,nkp
+                  kp_sets(iset)%xkp(1:3,ikp,iseg) = start_point(1:3) + REAL(ikp, kind=dp) * dk(1:3)
+               END DO
+            END DO
+         ELSE
+            ! Single point
+            IF (ALLOCATED(custom_start)) THEN
+               start_point => custom_start
+            ELSE
+               CALL section_vals_val_get(kp_sets, "SPECIAL_POINT", i_rep_section=iset, &
+                  i_rep_val=1, r_vals=start_point)
+            END IF
+            ! Write the coordinates
+            kp_sets(iset)%xkp(1:3,1,1) = start_point(1:3)
+         END IF
+         IF (ALLOCATED(custom_start)) DEALLOCATE (custom_start)
+      END DO
+   END SUBROUTINE read_kpoint_set
 
 END MODULE kpoint_methods
