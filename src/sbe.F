@@ -74,6 +74,8 @@ MODULE sbe
                                              gemm_square
    USE mathconstants,                  ONLY: twopi
    USE qs_moments,                     ONLY: qs_moment_kpoints
+   USE qs_energy_init,                 ONLY: qs_energies_init
+   USE qs_scf,                         ONLY: scf
 
 #include "./base/base_uses.f90"
 
@@ -113,98 +115,68 @@ CONTAINS
       COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
       TYPE(cp_logger_type), POINTER                      :: logger
       REAL(kind=dp), DIMENSION(:), POINTER               :: ref_custom
-      LOGICAL                                            :: success
 
       unit_nr = cp_logger_get_default_io_unit()
       IF (unit_nr > 0) CALL print_sbe_header_info(unit_nr)
 
       CALL force_env_get(force_env, qs_env=qs_env)
 
-      ! Run the initial DFT calculation
-      IF (unit_nr > 0) WRITE(unit_nr, "(A37)") " SBE| Running initial DFT calculation"
-      CALL force_env_calc_energy_force(force_env, calc_force=.FALSE., consistent_energies=.FALSE.)
-      IF (unit_nr > 0) WRITE(unit_nr, "(A34)") " SBE| Initial DFT calculation done"
+      ! Allocate the basics
+      CALL qs_energies_init(qs_env, calc_forces=.FALSE.)
 
-      CALL timeset(routineN, handle)
-
-      ! Init the environment
+      ! Initialize the environment
       NULLIFY (sbe_env)
       CALL init_sbe_env(sbe_env, force_env)
-      ! DEBUG : Test the BCH propagation
-      ! sbe_env%propagator_method = sbe_propagator_etrs
-      ! CALL test_bch()
-
-      ! ! DEBUG : Print the dipole moments and the bandstructure
-      ! CALL qs_moment_kpoints(qs_env, 1, use_mom_ref_zero, ref_custom, sbe_env%n_ao, sbe_env%unit_nr)
-
-      ! ! DEBUG : Testing the MPI gather
-      ! DO i=sbe_env%kpoints%kp_dist(1, sbe_env%mepos), sbe_env%kpoints%kp_dist(2,sbe_env%mepos)
-      !    i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
-      !    DO j=1,sbe_env%n_ao
-      !       sbe_env%band_occupations(1,j,i_local) = CMPLX(i, j, kind=dp)
-      !    END DO
-      ! END DO
-
-      ! ! Do the actual test
-      ! CALL gather_occupations(sbe_env%band_occupations, sbe_env%gathered_occupations, sbe_env%kpoints)
-      ! IF (sbe_env%unit_nr > 0) THEN
-      !    ! Print gathered
-      !    DO i=1, sbe_env%kpoints%nkp
-      !       DO j=1, sbe_env%n_ao
-      !          PRINT *, "SBE| Gather test", j, i, sbe_env%gathered_occupations(1,j,i)
-      !       END DO
-      !    END DO
-      ! END IF
-
-      ! Investigate h and S matrices
-      CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, &
-                      matrix_ks_kp=matrix_h_kp, kpoints=kpoints)
-      ! Get kpoint information
-      CALL get_kpoint_info(kpoints, sab_nl=sab_nl)
-
-      ! ! === Transformation by the original method
-      ! CALL dbcsr_create(s_k, name="S(k)", template=matrix_s_kp(1,1)%matrix)
-      ! CALL dbcsr_create(sc_k, name="S(k)", template=matrix_s_kp(1,1)%matrix)
-      ! CALL cp_dbcsr_alloc_block_from_nbl(s_k, sab_nl)
-      ! CALL cp_dbcsr_alloc_block_from_nbl(sc_k, sab_nl)
-      ! single_k(:) = xkp(:,1)
-      ! CALL rskp_transform(rmatrix=s_k, cmatrix=sc_k, rsmat=matrix_s_kp, ispin=1, xkp=single_k, &
-      !         cell_to_index=cell_to_index, sab_nl=sab_nl)
-      ! CALL dbcsr_print(s_k)
-      ! CALL dbcsr_print(sc_k)
-      ! CALL dbcsr_release(s_k)
-      ! CALL dbcsr_release(sc_k)
-      ! === Transformation by the duplicated method
       IF (unit_nr > 0) WRITE(unit_nr, "(A29,I51)") " SBE| Number of mirror images", sbe_env%n_images
       IF (unit_nr > 0) WRITE(unit_nr, "(A52,E25.3,A3)") &
               " SBE| Approximate memory per rank for overlap matrix", REAL(sbe_env%n_spin, kind=dp) * &
               REAL(sbe_env%n_images, kind=dp) * REAL(sbe_env%n_ao, kind=dp) * REAL(sbe_env%n_ao, kind=dp) / &
               (1024.0_dp * 1024.0_dp * 1024.0_dp), "GiB"
-      CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index, 1)
-      CALL replicate_rs_matrices(matrix_h_kp, kpoints, sbe_env%ham_zero_rs, sbe_env%kpoints%cell_to_index)
-      CALL output_ham_rs_restart(sbe_env%ham_rs_restart_section, sbe_env%ham_zero_rs)
-      ! DEBUG : Print the ham_zero_rs just saved
-      PRINT *, sbe_env%mepos, sbe_env%ham_zero_rs(1,1,1,1)
-      ! DEBUG : Reload the saved ham_zero_rs
-      CALL read_ham_rs_restart(sbe_env%ham_rs_restart_section, sbe_env%ham_zero_rs, success)
-      ! DEBUG : Print the ham_zero_rs just loaded
-      PRINT *, sbe_env%mepos, success, sbe_env%ham_zero_rs(1,1,1,1)
 
-      ! Generate the moments in RS
+      ! Check whether the restart file exists
+      CALL read_ham_rs_restart(sbe_env%ham_rs_restart_section, sbe_env%ham_zero_rs, info)
+      ! IF (sbe_env%unit_nr > 0) PRINT *, "SBE| Restart info", info
+      IF (info > 0) THEN
+         ! Report
+         SELECT CASE (info)
+            CASE (1)
+               ! File not found
+               IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A)") &
+                  " SBE| Restart Hamiltonian file not found - running SCF calculation"
+            CASE (2)
+               ! Mismatched restart file - need to abort to not overwrite different file
+               CPABORT("SBE : Restart Hamiltonian file mismatched.")
+            CASE DEFAULT
+               ! Other unknown error, rerun SCF
+               IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A)") &
+                  " SBE| Restart Hamiltonian file error - running SCF calculation"
+         END SELECT
+         ! Run the actual SCF calculation
+         ! TODO : Warn/handle other SCF types, which are handled within qs_energies
+         CALL scf(qs_env)
+         ! Subtracts the SCF iterations from the total propagation time
+         CALL timeset(routineN, handle)
+         ! Extract the ks-matrix and distribute it
+         CALL get_qs_env(qs_env, matrix_ks_kp=matrix_h_kp, kpoints=kpoints)
+         CALL replicate_rs_matrices(matrix_h_kp, kpoints, sbe_env%ham_zero_rs, sbe_env%kpoints%cell_to_index)
+         ! Save it for later, if required
+         CALL output_ham_rs_restart(sbe_env%ham_rs_restart_section, sbe_env%ham_zero_rs)
+      ELSE
+         CALL timeset(routineN, handle)
+         IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A)") " SBE| Skipping SCF calculation - RS Hamiltonian read from file"
+      END IF
+
+      ! Distribute the S matrix
+      CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, kpoints=kpoints)
+      CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index, 1)
+
+      ! Calculate and distribute the dipole matrices
       ! TODO : Check dependence on reference point, also in RTBSE
       NULLIFY (moments_rs_img)
       ALLOCATE (moments_rs_img(3, sbe_env%n_images))
       CALL get_moments_rs_dbcsr(qs_env, moments_rs_img, sbe_env%sab_all)
-      ! ! DEBUG
-      ! CALL dbcsr_print(moments_rs_img(1,2)%matrix)
       CALL replicate_rs_matrices(moments_rs_img, sbe_env%kpoints, &
                                  sbe_env%moments_rs, sbe_env%kpoints%cell_to_index)
-      ! ! DEBUG
-      ! DO i=1, sbe_env%n_ao
-      !    DO j=1, sbe_env%n_ao
-      !       PRINT *, i, j, sbe_env%moments_rs(1, i, j, 2)
-      !    END DO
-      ! END DO
       DO i=1,3
          DO j=1, sbe_env%n_images
             CALL dbcsr_release_p(moments_rs_img(i, j)%matrix)

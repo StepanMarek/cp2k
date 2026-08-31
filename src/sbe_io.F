@@ -381,10 +381,10 @@ CONTAINS
       END IF
       CALL cp_print_key_finished_output(restart_unit, logger, restart_section)
    END SUBROUTINE output_ham_rs_restart
-   SUBROUTINE read_ham_rs_restart(restart_section, ham_rs, success)
+   SUBROUTINE read_ham_rs_restart(restart_section, ham_rs, error)
       TYPE(section_vals_type), POINTER                   :: restart_section
       REAL(kind=dp), DIMENSION(:,:,:,:)                  :: ham_rs
-      LOGICAL                                            :: success
+      INTEGER                                            :: error
       TYPE(cp_logger_type), POINTER                      :: logger
       CHARACTER(len=default_path_length)                 :: filename
       INTEGER                                            :: n_spin, nrows, ncols, n_img, &
@@ -394,13 +394,13 @@ CONTAINS
                                                             restart_unit
 
       logger => cp_get_default_logger()
-      success = .TRUE.
+      error = 0
 
       ! Check whether the file exists
       filename = cp_print_key_generate_filename(logger, restart_section, extension=".rs", &
          my_local=.FALSE.)
       IF (.NOT. file_exists(filename)) THEN
-         success=.FALSE.
+         error=1
          RETURN
       END IF
 
@@ -424,7 +424,7 @@ CONTAINS
       ! The comparison is done on all ranks
       IF (target_n_spin /= n_spin .OR. target_nrows /= nrows .OR. &
          target_ncols /= ncols .OR. target_n_img /= n_img) THEN
-         success = .FALSE.
+         error = 2
          RETURN
       END IF
 
