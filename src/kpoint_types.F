@@ -65,6 +65,7 @@ MODULE kpoint_types
    PUBLIC :: kpoint_sym_type
    PUBLIC :: kpoint_sym_create
    PUBLIC :: kpoint_set_type
+   PUBLIC :: kpoint_set_release
 
 ! **************************************************************************************************
 !> \brief Keeps information about a specific k-point
@@ -1202,6 +1203,24 @@ CONTAINS
       END IF
 
    END SUBROUTINE kpoint_sym_release
+! **************************************************************************************************
+!> \brief Release kpoint set type, array-wise
+!> \param kp_set ...
+!> \author Stepan Marek
+!> \date 08.2026
+! **************************************************************************************************
+   SUBROUTINE kpoint_set_release(kp_set)
+      TYPE(kpoint_set_type), DIMENSION(:), ALLOCATABLE   :: kp_set
+
+      INTEGER                                            :: i
+
+      DO i=1,SIZE(kp_set, 1)
+         ! Release allocated segments
+         IF (ALLOCATED(kp_set(i)%xkp)) DEALLOCATE (kp_set(i)%xkp)
+      END DO
+
+      DEALLOCATE (kp_set)
+   END SUBROUTINE kpoint_set_release
 
 ! **************************************************************************************************
 

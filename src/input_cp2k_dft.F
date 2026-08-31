@@ -54,7 +54,9 @@ MODULE input_cp2k_dft
         sccs_fattebert_gygi, sic_ad, sic_eo, sic_list_all, sic_list_unpaired, sic_mauri_spz, &
         sic_mauri_us, sic_none, slater, use_mom_ref_coac, use_mom_ref_com, use_mom_ref_user, &
         use_mom_ref_zero, use_restart_wfn, use_rt_restart, use_scf_wfn, weight_type_mass, &
-        weight_type_unit
+        weight_type_unit, &
+        sbe_kpoints_mpack, sbe_kpoints_kset, kpoint_units_bvec, kpoint_units_angstrom, &
+        kpoint_units_bohr
    USE input_cp2k_almo,                 ONLY: create_almo_scf_section
    USE input_cp2k_as,                   ONLY: create_active_space_section
    USE input_cp2k_ec,                   ONLY: create_ec_section
@@ -2370,6 +2372,7 @@ CONTAINS
       TYPE(section_type), POINTER                        :: section
 
       TYPE(keyword_type), POINTER                        :: keyword
+      TYPE(section_type), POINTER                        :: subsection, set_section
 
       NULLIFY (keyword)
       CPASSERT(.NOT. ASSOCIATED(section))
@@ -2410,16 +2413,44 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      ! Simplistic separate k-point setting
-      ! TODO : Separate into a custom section
-      CALL keyword_create(keyword, __LOCATION__, name="KPOINTS", &
-         usage="KPOINTS N_x N_y N_z", &
-         description="Defines Monkhorst-Pack k-point grid of N_x x N_y x N_z points.", &
-         type_of_var=integer_t, &
+      ! KPOINTS for SBE
+      NULLIFY (subsection)
+      CALL section_create(subsection, __LOCATION__, name="KPOINTS", &
+         description="Controls the KPOINT grid used in the SBE calculation.", &
+         repeats=.FALSE.)
+
+      ! Add grid dimensions
+      CALL keyword_create(keyword, __LOCATION__, name="_SECTION_PARAMETERS_", &
+         description="Defines dimensions for some KPOINT schemes.", &
+         usage="&KPOINTS 4 2 2", &
          default_i_vals=[1,1,1], &
+         type_of_var=integer_t, &
          n_var=3)
-      CALL section_add_keyword(section, keyword)
+      CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
+
+      ! Scheme for KPOINTS
+      CALL keyword_create(keyword, __LOCATION__, name="SCHEME", &
+         description="Which scheme is used to create the set of KPOINTS.", &
+         enum_i_vals=[sbe_kpoints_mpack, sbe_kpoints_kset], &
+         default_i_val=sbe_kpoints_mpack, &
+         enum_c_vals=s2a("MONKHORST-PACK", "KPOINT_SET"), &
+         enum_desc=s2a("Regular Monkhorst-Pack grid, dimensions specified "// &
+         "in the &KPOINTS section.", "Specific path through the Brillouin zone, "// &
+         "defined in the &KPOINT_SET subsection.") &
+      )
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      ! Add the KPOINT_SET section(s)
+      NULLIFY (set_section)
+      CALL create_sbe_kpoint_set_section(set_section)
+      CALL section_add_subsection(subsection, set_section)
+      CALL section_release(set_section)
+
+      ! Add KPOINTS section to SBE section
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
 
    END SUBROUTINE create_sbe_section
 ! **************************************************************************************************
@@ -2469,6 +2500,54 @@ CONTAINS
       CALL section_release(print_key)
 
       END SUBROUTINE create_sbe_print_keys
+! **************************************************************************************************
+!> \brief Creates the KPOINT_SET section, primarily for use in SBE KPOINTS
+!> \param section Relevant SBE KPOINTS section
+!> \author Stepan Marek
+!> \date 07.2026
+! **************************************************************************************************
+   SUBROUTINE create_sbe_kpoint_set_section(section)
+      TYPE(section_type), POINTER                        :: section
+
+      TYPE(keyword_type), POINTER                        :: keyword
+
+      ! Create the section
+      CALL section_create(section, __LOCATION__, name="KPOINT_SET", &
+         description="Describes a single line segment through the Brillouin zone. "// &
+         "Repeated sections describe other line segments.", &
+         repeats=.TRUE.)
+
+      NULLIFY (keyword)
+      ! Number of points for each sub-segment
+      CALL keyword_create(keyword, __LOCATION__, name="NPOINTS", &
+         description="Number of points between each special point", &
+         type_of_var=integer_t, &
+         default_i_val=100)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      ! Units of the special point coordinates
+      CALL keyword_create(keyword, __LOCATION__, name="UNITS", &
+         description="Units used for the special point coordinates", &
+         enum_i_vals=[kpoint_units_bvec, kpoint_units_angstrom, kpoint_units_bohr], &
+         default_i_val=kpoint_units_bvec, &
+         enum_c_vals=s2a("B_VEC", "CART_ANGSTROM", "CART_BOHR"), &
+         enum_desc=s2a("Coordinates given in units of the reciprocal cell vectors.", &
+            "Coordinates given in units of Cartesian k-vector basis, in 1/Angström.", &
+            "Coordinates given in units of Cartesian k-vector basis, in 1/Bohr"))
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="SPECIAL_POINT", &
+         description="Coordinates of a special point -- each two special points are "// &
+         "connected by straight lines in the K-space.", &
+         type_of_var=real_t, &
+         n_var=3, &
+         repeats=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+   END SUBROUTINE create_sbe_kpoint_set_section
 ! **************************************************************************************************
 !> \brief      Create CP2K input section for the SCCS model
 !> \param section ...

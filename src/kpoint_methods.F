@@ -57,10 +57,14 @@ MODULE kpoint_methods
    USE input_constants,                 ONLY: smear_fermi_dirac,&
                                               smear_gaussian,&
                                               smear_mp,&
-                                              smear_mv
+                                              smear_mv,&
+                                              kpoint_units_bvec,&
+                                              kpoint_units_angstrom,&
+                                              kpoint_units_bohr
    USE input_cp2k_kpoints,              ONLY: use_spglib_kpoint_backend,&
                                               use_spglib_kpoint_symmetry
-   USE kinds,                           ONLY: dp
+   USE kinds,                           ONLY: dp,&
+                                              default_string_length
    USE kpoint_types,                    ONLY: get_kpoint_info,&
                                               kind_rotmat_type,&
                                               kpoint_env_create,&
@@ -68,6 +72,7 @@ MODULE kpoint_methods
                                               kpoint_env_type,&
                                               kpoint_sym_create,&
                                               kpoint_sym_type,&
+                                              kpoint_set_type,&
                                               kpoint_type
    USE mathconstants,                   ONLY: twopi
    USE mathlib,                         ONLY: inv_3x3
@@ -96,6 +101,10 @@ MODULE kpoint_methods
    USE smearing_utils,                  ONLY: Smearkp,&
                                               Smearkp2
    USE util,                            ONLY: get_limit
+   USE input_section_types,             ONLY: section_vals_type, &
+                                              section_vals_get, &
+                                              section_vals_val_get
+   USE physcon,                         ONLY: angstrom
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -2623,23 +2632,25 @@ CONTAINS
       INTEGER                                            :: nsets, &
                                                             iset, &
                                                             nkp, &
-                                                            n_seg
-      CHARACTER(len=default_string_length)               :: unit_name
+                                                            ikp, &
+                                                            n_seg, &
+                                                            iseg, &
+                                                            k_unit
       REAL(kind=dp), DIMENSION(3)                        :: dk
       REAL(kind=dp), DIMENSION(:), POINTER               :: start_point, &
                                                             end_point
-      REAL(kind=dp), DIMENSION(3), ALLOCATABLE           :: custom_start
+      REAL(kind=dp), DIMENSION(:), ALLOCATABLE, TARGET   :: custom_start
 
       ! Read the input section, get the number of sets
       CALL section_vals_get(set_section, n_repetition=nsets)
       ALLOCATE (kp_sets(nsets))
       DO iset=1,nsets
          ! For each set, read the npoints and units - uniform across the set
-         CALL section_vals_val_get(kp_sets, "NPOINTS", i_rep_section=iset, i_val=nkp)
+         CALL section_vals_val_get(set_section, "NPOINTS", i_rep_section=iset, i_val=nkp)
          kp_sets(iset)%nkp = nkp
-         CALL section_vals_val_get(kp_sets, "UNITS", i_rep_section=iset, c_val=unit_name)
+         CALL section_vals_val_get(set_section, "UNITS", i_rep_section=iset, i_val=k_unit)
          ! Now, get the number of segments
-         CALL section_vals_val_get(kp_sets, "SPECIAL_POINT", i_rep_section=iset, n_rep_val=n_seg)
+         CALL section_vals_val_get(set_section, "SPECIAL_POINT", i_rep_section=iset, n_rep_val=n_seg)
          IF (n_seg > 1) THEN
             n_seg = n_seg - 1
          ELSE IF (n_seg < 1) THEN
@@ -2653,34 +2664,34 @@ CONTAINS
          END IF
          kp_sets(iset)%n_segments = n_seg
          ! Now have all the information to allocate current segment
-         ALLOCATE (kp_sets(iset)%xkp(3,nkp,n_seg)
-         IF (n_seg > 1) THEN
+         ALLOCATE (kp_sets(iset)%xkp(3,nkp,n_seg))
+         IF (nkp > 1) THEN
             ! Iterate through segments
             DO iseg=1, n_seg
                ! Find out the dk
-               CALL section_vals_val_get(kp_sets, "SPECIAL_POINT", i_rep_section=iset, &
+               CALL section_vals_val_get(set_section, "SPECIAL_POINT", i_rep_section=iset, &
                   i_rep_val=iseg, r_vals=start_point)
-               CALL section_vals_val_get(kp_sets, "SPECIAL_POINT", i_rep_section=iset, &
+               CALL section_vals_val_get(set_section, "SPECIAL_POINT", i_rep_section=iset, &
                   i_rep_val=iseg+1, r_vals=end_point)
-               dk(1:3) = end_point(1:3) - start_point(1:3) / REAL(nkp - 1, kind=dp)
+               dk(1:3) = (end_point(1:3) - start_point(1:3)) / REAL(nkp - 1, kind=dp)
                ! Multiply by unit matrices, if required
-               SELECT CASE (unit_name)
-                  CASE ("B_VECTOR")
+               SELECT CASE (k_unit)
+                  CASE (kpoint_units_bvec)
                      dk(1:3) = dk(1:3)
-                  CASE ("CART_ANGSTROM")
-                     dk(1:3) = (dk1(1)*hmat(1, 1:3) + &
+                  CASE (kpoint_units_angstrom)
+                     dk(1:3) = (dk(1)*hmat(1, 1:3) + &
                                        dk(2)*hmat(2, 1:3) + &
                                        dk(3)*hmat(3, 1:3))/twopi*angstrom
-                  CASE ("CART_BOHR")
-                     dk(1:3) = (dk1(1)*hmat(1, 1:3) + &
+                  CASE (kpoint_units_bohr)
+                     dk(1:3) = (dk(1)*hmat(1, 1:3) + &
                                        dk(2)*hmat(2, 1:3) + &
                                        dk(3)*hmat(3, 1:3))/twopi
                   CASE DEFAULT
                      CPABORT("Unknown units in KPOINT_SET")
                END SELECT
                kp_sets(iset)%xkp(1:3,1,iseg) = start_point(1:3)
-               DO ikp=1,nkp
-                  kp_sets(iset)%xkp(1:3,ikp,iseg) = start_point(1:3) + REAL(ikp, kind=dp) * dk(1:3)
+               DO ikp=2,nkp
+                  kp_sets(iset)%xkp(1:3,ikp,iseg) = start_point(1:3) + REAL(ikp-1, kind=dp) * dk(1:3)
                END DO
             END DO
          ELSE
@@ -2688,7 +2699,7 @@ CONTAINS
             IF (ALLOCATED(custom_start)) THEN
                start_point => custom_start
             ELSE
-               CALL section_vals_val_get(kp_sets, "SPECIAL_POINT", i_rep_section=iset, &
+               CALL section_vals_val_get(set_section, "SPECIAL_POINT", i_rep_section=iset, &
                   i_rep_val=1, r_vals=start_point)
             END IF
             ! Write the coordinates

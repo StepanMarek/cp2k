@@ -13,8 +13,11 @@ MODULE sbe_types
    USE kpoint_types, ONLY: kpoint_type, &
                            kpoint_create, &
                            kpoint_release, &
-                           read_kpoint_section
-   USE kpoint_methods, ONLY: kpoint_init_cell_index
+                           read_kpoint_section, &
+                           kpoint_set_type, &
+                           kpoint_set_release
+   USE kpoint_methods, ONLY: kpoint_init_cell_index, &
+                             read_kpoint_set
    USE kinds, ONLY: dp
    USE message_passing, ONLY: mp_para_env_type
    USE cp_control_types, ONLY: dft_control_type
@@ -38,7 +41,9 @@ MODULE sbe_types
                               cp_get_default_logger
    USE physcon, ONLY: femtoseconds
    USE input_constants, ONLY: sbe_propagator_rk4, &
-                              sbe_propagator_euler
+                              sbe_propagator_euler, &
+                              sbe_kpoints_mpack, &
+                              sbe_kpoints_kset
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -126,8 +131,9 @@ CONTAINS
       TYPE(force_env_type), POINTER                      :: force_env
       CHARACTER(len=*), PARAMETER                        :: routineN="init_sbe_env"
       INTEGER                                            :: handle, &
-                                                            i, &
-                                                            info
+                                                            i, j, k, &
+                                                            info, &
+                                                            kp_scheme_i
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mp_para_env_type), POINTER                    :: para_env
@@ -136,11 +142,13 @@ CONTAINS
       TYPE(cell_type), POINTER                           :: cell
       TYPE(section_vals_type), POINTER                   :: kpoint_section, &
                                                             force_input, &
-                                                            hfx_section
+                                                            hfx_section, &
+                                                            kp_section
       REAL(kind=dp)                                      :: efficiency
       TYPE(cp_logger_type), POINTER                      :: logger
       LOGICAL                                            :: do_hfx
       INTEGER, DIMENSION(:), POINTER                     :: mpack_dim
+      TYPE(kpoint_set_type), DIMENSION(:), ALLOCATABLE   :: kp_sets
 
       CALL timeset(routineN, handle)
 
@@ -180,37 +188,50 @@ CONTAINS
       ! Start by getting the info into kpoints
       ! TODO : More sophisticated options
       NULLIFY (mpack_dim)
-      CALL section_vals_val_get(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%KPOINTS", &
-         i_vals=mpack_dim)
-      ! Populate the kpoints
-      sbe_env%kpoints%kp_scheme = "MONKHORST-PACK"
-      sbe_env%kpoints%nkp_grid(:) = mpack_dim(:)
-      sbe_env%kpoints%nkp = PRODUCT(mpack_dim)
-      ! Actual coordinates
-      ALLOCATE (sbe_env%kpoints%xkp(3,sbe_env%kpoints%nkp), source=0.0_dp)
-      CALL compute_xkp(sbe_env%kpoints%xkp, 1, sbe_env%kpoints%nkp, sbe_env%kpoints%nkp_grid)
+      kp_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%KPOINTS")
+      CALL section_vals_val_get(kp_section, "SCHEME", i_val=kp_scheme_i)
+      SELECT CASE (kp_scheme_i)
+         CASE (sbe_kpoints_mpack)
+            sbe_env%kpoints%kp_scheme = "MONKHORST-PACK"
+            ! Immediately read the dimensions
+            CALL section_vals_val_get(kp_section, "_SECTION_PARAMETERS_", i_vals=mpack_dim)
+            sbe_env%kpoints%nkp_grid(:) = mpack_dim(:)
+            sbe_env%kpoints%nkp = PRODUCT(mpack_dim)
+            ! Calculate the MONKHORT-PACK grid
+            ALLOCATE (sbe_env%kpoints%xkp(3,sbe_env%kpoints%nkp), source=0.0_dp)
+            CALL compute_xkp(sbe_env%kpoints%xkp, 1, sbe_env%kpoints%nkp, &
+               sbe_env%kpoints%nkp_grid)
+         CASE (sbe_kpoints_kset)
+            ! For compatibility, use GENERAL
+            ! TODO : Maybe do integers here as well?
+            sbe_env%kpoints%kp_scheme = "GENERAL"
+            CALL read_kpoint_set(section_vals_get_subs_vals(kp_section, "KPOINT_SET"), &
+               kp_sets, sbe_env%hmat)
+            ! TODO : Transform to kpoints env
+            sbe_env%kpoints%nkp = 0 
+            DO i=1, SIZE(kp_sets, 1)
+               sbe_env%kpoints%nkp = sbe_env%kpoints%nkp + &
+                  kp_sets(i)%n_segments * kp_sets(i)%nkp
+            END DO
+            ALLOCATE (sbe_env%kpoints%xkp(3,sbe_env%kpoints%nkp), source=0.0_dp)
+            ! Copy + union the segments
+            DO i=1, SIZE(kp_sets, 1)
+               DO j=1, kp_sets(i)%n_segments
+                  DO k=1, kp_sets(i)%nkp
+                     sbe_env%kpoints%xkp(:,kp_sets(i)%nkp*(j-1) + k) = &
+                        kp_sets(i)%xkp(:, k, j)
+                  END DO
+               END DO
+            END DO
+            CALL kpoint_set_release(kp_sets)
+         CASE DEFAULT
+            CPABORT("The KPOINT scheme is not implemented for SBEs.")
+      END SELECT
       ! Equal kpoint weights
+      ! TODO : How to do kpoint weights in KPOINT_SET scheme
+      ! TODO : Is it even meaningful to have BZ integration only along a chosen line?
       ALLOCATE (sbe_env%kpoints%wkp(sbe_env%kpoints%nkp))
       sbe_env%kpoints%wkp(:) = 1.0_dp/REAL(sbe_env%kpoints%nkp, kind=dp)
-      ! kpoint_section => section_vals_get_subs_vals(force_input, "DFT%KPOINTS")
-      ! CALL read_kpoint_section(sbe_env%kpoints, kpoint_section, cell%hmat)
-      ! SELECT CASE (sbe_env%kpoints%kp_scheme)
-      !    CASE ("MONKHORST-PACK")
-      !       ! Calculate the xkp
-      !       ! TODO : Is any symmetry in kpoints available in non-linear SBE?
-      !       sbe_env%kpoints%nkp = PRODUCT(sbe_env%kpoints%nkp_grid)
-      !       ALLOCATE (sbe_env%kpoints%xkp(3,sbe_env%kpoints%nkp), &
-      !                                     source=0.0_dp)
-      !       ! The grid is accessible on all the ranks
-      !       CALL compute_xkp(sbe_env%kpoints%xkp, 1, sbe_env%kpoints%nkp, sbe_env%kpoints%nkp_grid)
-      !       ALLOCATE (sbe_env%kpoints%wkp(sbe_env%kpoints%nkp))
-      !       sbe_env%kpoints%wkp(:) = 1.0_dp/REAL(sbe_env%kpoints%nkp, kind=dp)
-      !    CASE ("GENERAL")
-      !       ! Already calculated in read_kpoint_section
-      !    CASE DEFAULT
-      !       ! Abort - unknown kpoint scheme
-      !       CALL cp_abort(__LOCATION__, "Unknown kpoint scheme in SBE!")
-      ! END SELECT
       ! Get the kpoint distribution
       CALL sbe_create_kpoint_dist(sbe_env%kpoints, efficiency)
       sbe_env%mepos = sbe_env%kpoints%para_env%mepos + 1
@@ -225,6 +246,14 @@ CONTAINS
             WRITE (sbe_env%unit_nr, "(A11,I4,A13,I38,I4,A6,I4)") " SBE| Task ", i-1, &
                " kpoint range", sbe_env%kpoints%kp_dist(1,i), &
                sbe_env%kpoints%kp_dist(2,i), " total", sbe_env%local_nkp
+         END DO
+      END IF
+      ! Print out info about kpoints themselves
+      ! TODO : Separate into new PRINT section or not?
+      IF (sbe_env%unit_nr > 0) THEN
+         DO i=1,sbe_env%kpoints%nkp
+            WRITE (sbe_env%unit_nr, "(A12,I8,E20.8E3,E20.8E3,E20.8E3)") &
+               " SBE| Kpoint", i, sbe_env%kpoints%xkp(:,i)
          END DO
       END IF
 

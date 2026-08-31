@@ -1000,6 +1000,13 @@ MODULE input_constants
                                                sbe_propagator_etrs = 2, &
                                                sbe_propagator_rk4 = 4
 
+   INTEGER, PARAMETER, PUBLIC               :: sbe_kpoints_mpack = 1, &
+                                               sbe_kpoints_kset = 2
+
+   INTEGER, PARAMETER, PUBLIC               :: kpoint_units_bvec = 1, &
+                                               kpoint_units_angstrom = 2, &
+                                               kpoint_units_bohr = 3
+
    ! how to solve polarizable force fields
    INTEGER, PARAMETER, PUBLIC               :: do_fist_pol_none = 1, &
                                                do_fist_pol_sc = 2, &
