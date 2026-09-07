@@ -170,6 +170,22 @@ CONTAINS
       CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, kpoints=kpoints)
       CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index, 1)
 
+      ! Check the Hermiticity of the real-space Hamiltonian
+      ! NOTE : Hamiltonian is not Hermitian mirror-image-wise -- Hermitian conjugate of image
+      ! is identical only to the mirror image, not the image itself
+      ! TODO : Could this be used for refinement instead of per-update Hermitian refinement?
+      ! buffer = 0.0_dp
+      ! max_buffer = 0.0_dp
+      ! DO j=1,sbe_env%n_spin
+      !    DO i=1, sbe_env%n_images
+      !       buffer = nonherm_metric(CMPLX(sbe_env%ham_zero_rs(j,:,:,i), 0.0, kind=dp))
+      !       IF (buffer > max_buffer) max_buffer = buffer
+      !    END DO
+      ! END DO
+      ! IF (sbe_env%unit_nr > 0) THEN
+      !    PRINT *, "SBE | Non-hermitian metric", max_buffer
+      ! END IF
+
       ! Calculate and distribute the dipole matrices
       ! TODO : Check dependence on reference point, also in RTBSE
       NULLIFY (moments_rs_img)
@@ -186,6 +202,7 @@ CONTAINS
 
       ! Initialization of the density matrix
       ! Needs KS orbitals - need to get kpoint overlap and ham_zero
+      info = 0
       DO i = sbe_env%kpoints%kp_dist(1, sbe_env%mepos), sbe_env%kpoints%kp_dist(2, sbe_env%mepos)
          ! Explicitly set the fields to zero
          ! TODO : Delta kick application by constant vector only?
@@ -294,6 +311,8 @@ CONTAINS
                ! Log max idempotency violation in this k-point cycle
                ! DEBUG : Idempotency violation printing
                buffer = nonidempot_metric(sbe_env%densmat(j,:,:,i_local), sbe_env%overlap_kp, sbe_env%densmat_work)
+               ! ! DEBUG : Hermiticity violation printing
+               ! buffer = nonherm_metric(sbe_env%ham_zero_kp(j,:,:))
                IF (buffer > max_buffer) max_buffer = buffer
                CALL propagate_density(sbe_env, sbe_env%densmat(j,:,:,i_local), &
                                       sbe_env%densmat_next(j,:,:,i_local), j, i, info)
@@ -549,7 +568,7 @@ CONTAINS
       INTEGER                                            :: ikp_local, &
                                                             info, &
                                                             ispin, &
-                                                            j
+                                                            j, k
 
       ikp_local = ikp - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
       ! Calculate the xkp based on equilibrium xkp and vector potential
@@ -581,6 +600,16 @@ CONTAINS
          ! Equilibrium Hamiltonian
          CALL rs_to_kp(sbe_env%ham_zero_rs(ispin,:,:,:), sbe_env%ham_zero_kp(ispin,:,:), &
                     sbe_env%kpoints%index_to_cell, xkp_current)
+         ! Purify the equilibrium Hamiltonian TODO : output difference, check HFX behaviour
+         DO j=1,sbe_env%n_ao
+            DO k=1,sbe_env%n_ao
+               ! Use ham_kp as workspace
+               sbe_env%ham_kp(ispin,j,k) = CMPLX(0.5,0.0,kind=dp) * &
+                  (sbe_env%ham_zero_kp(ispin,j,k) + CONJG(sbe_env%ham_zero_kp(ispin,k,j)))
+            END DO
+         END DO
+         ! Overwrite the original Hamiltonian
+         sbe_env%ham_zero_kp(:, :, :) = sbe_env%ham_kp(:,:,:)
       END DO
       ! Continue with direction dependent operators
       DO j = 1, 3

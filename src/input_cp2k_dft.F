@@ -2477,6 +2477,7 @@ CONTAINS
       CALL section_add_subsection(print_section, print_key)
       CALL section_release(print_key)
 
+      ! k-resolved MO occupations
       CALL cp_print_key_section_create(print_key, __LOCATION__, "OCCUPATIONS_KP", &
          description="Prints the k-resolved bands as function of time. Stores them in a wide text file "// &
          "-- file has a column for each kpoint-band combination "// &
@@ -2489,6 +2490,7 @@ CONTAINS
       CALL section_add_subsection(print_section, print_key)
       CALL section_release(print_key)
 
+      ! Restart Hamiltonian -- saved once before the propagation is run
       CALL cp_print_key_section_create(print_key, __LOCATION__, "RESTART_HAM", &
          description="Controls printing of the restart Hamiltonian in SBE, "// &
          "which allows for skipping of the SCF part before starting the calculation.", &
@@ -2496,6 +2498,17 @@ CONTAINS
          each_iter_names=s2a("SCF"), &
          each_iter_values=[1], &
          filename="restart_ham")
+      CALL section_add_subsection(print_section, print_key)
+      CALL section_release(print_key)
+
+      ! Bandstructure -- saved once before the propagation is run, on different grid than the SCF
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "BANDSTRUCTURE", &
+         description="Controls printing of the initial bandstructure before the real time propagation, "// &
+         "calculated on the k-grid specific for the time-propagation.", &
+         print_level=high_print_level, common_iter_levels=0, &
+         each_iter_names=s2a("SCF"), &
+         each_iter_values=[1], &
+         filename="bandstructure")
       CALL section_add_subsection(print_section, print_key)
       CALL section_release(print_key)
 

@@ -111,6 +111,7 @@ MODULE sbe_types
       TYPE(section_vals_type), POINTER                   :: field_section, &
                                                             occ_kp_section, &
                                                             ham_rs_restart_section, &
+                                                            bandstructure_section, &
                                                             occ_section
    END TYPE sbe_env_type
 
@@ -175,6 +176,7 @@ CONTAINS
       sbe_env%occ_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%OCCUPATIONS_MO")
       sbe_env%occ_kp_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%OCCUPATIONS_KP")
       sbe_env%ham_rs_restart_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%RESTART_HAM")
+      sbe_env%bandstructure_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%BANDSTRUCTURE")
       ! Save dft_control pointer - necessary for make_field during propagation
       sbe_env%dft_control => dft_control
       ! Save cell - need for k-gradient construction during propagation
