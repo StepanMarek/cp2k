@@ -38,7 +38,8 @@ MODULE sbe
                                              output_occupations_kp_file, &
                                              output_ham_rs_restart, &
                                              read_ham_rs_restart, &
-                                             output_nonherm_metric
+                                             output_nonherm_metric , &
+                                             print_bandstructure
    USE sbe_utils,                      ONLY: print_sbe_header_info
    USE sbe_types,                      ONLY: sbe_env_type, &
                                              init_sbe_env, &
@@ -169,6 +170,11 @@ CONTAINS
       ! Distribute the S matrix
       CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, kpoints=kpoints)
       CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index, 1)
+
+      ! Print initial bandstructure
+      CALL print_bandstructure(sbe_env%ham_zero_rs, sbe_env%overlap_rs, &
+         sbe_env%bandstructure_section, sbe_env%kpoints, sbe_env%kpoints%xkp, &
+         sbe_env%lwork, sbe_env%eigwork, sbe_env%eigrwork)
 
       ! Check the Hermiticity of the real-space Hamiltonian
       ! NOTE : Hamiltonian is not Hermitian mirror-image-wise -- Hermitian conjugate of image
