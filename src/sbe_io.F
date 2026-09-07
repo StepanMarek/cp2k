@@ -19,13 +19,15 @@ MODULE sbe_io
    USE cp_output_handling, ONLY: cp_print_key_unit_nr, &
                                  cp_print_key_finished_output, &
                                  cp_print_key_generate_filename
-   USE physcon, ONLY: femtoseconds
+   USE physcon, ONLY: femtoseconds, &
+                      evolt
    USE rt_propagation_output, ONLY: print_rt_file, &
                                     rt_file_comp_real
    USE sbe_methods, ONLY: nonherm_metric, &
                           nonidempot_metric
    USE sbe_types, ONLY: sbe_env_type
    USE cp_files, ONLY: file_exists
+   USE kpoint_k_r_trafo_simple, ONLY: rs_to_kp
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -45,7 +47,8 @@ MODULE sbe_io
             gather_occupations, &
             output_ham_rs_restart, &
             read_ham_rs_restart, &
-            output_nonherm_metric
+            output_nonherm_metric, &
+            print_bandstructure
 
 CONTAINS
 ! **************************************************************************************************
@@ -439,4 +442,118 @@ CONTAINS
          END DO
       END DO
    END SUBROUTINE read_ham_rs_restart
+
+! **************************************************************************************************
+!> \brief Prints the initial bandstructure before propagation
+!> \param ham_zero_kp The equilibrium Hamiltonian, evaluated on the kpoint grid for SBE
+!> \author Stepan Marek
+!> \date 09.2026
+! **************************************************************************************************
+   SUBROUTINE print_bandstructure(ham_zero_rs, overlap_rs, bandstructure_section, kpoints, &
+         xkp, lwork, eigwork, eigrwork)
+      REAL(kind=dp), DIMENSION(:,:,:,:)                  :: ham_zero_rs, &
+                                                            overlap_rs
+      TYPE(section_vals_type), POINTER                   :: bandstructure_section
+      TYPE(kpoint_type)                                  :: kpoints
+      REAL(kind=dp), DIMENSION(:,:)                      :: xkp
+      INTEGER                                            :: lwork
+      COMPLEX(kind=dp), DIMENSION(:)                     :: eigwork
+      REAL(kind=dp), DIMENSION(:)                        :: eigrwork
+      TYPE(cp_logger_type), POINTER                      :: logger
+      INTEGER                                            :: unit_nr, &
+                                                            i, j, k, &
+                                                            info, &
+                                                            local_nkp, &
+                                                            i_local, &
+                                                            nkp, &
+                                                            n_ao, &
+                                                            n_spin, &
+                                                            mepos
+      REAL(kind=dp), DIMENSION(:,:,:), ALLOCATABLE       :: local_eigvals
+      REAL(kind=dp), DIMENSION(:,:,:), POINTER           :: gathered_eigvals
+      COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: h_kp, s_kp, s_work
+
+      n_spin = SIZE(ham_zero_rs, 1)
+      n_ao = SIZE(ham_zero_rs, 2)
+      mepos = kpoints%para_env%mepos + 1
+      local_nkp = kpoints%kp_dist(2, mepos) - kpoints%kp_dist(1,mepos) + 1
+      nkp = kpoints%nkp
+
+      ! Allocate local storage for eigenvalues
+      ALLOCATE (local_eigvals(n_spin, n_ao, local_nkp))
+
+      ! Temporary matrices for ZHEGV
+      ALLOCATE (h_kp(n_ao, n_ao))
+      ALLOCATE (s_kp(n_ao, n_ao))
+      ALLOCATE (s_work(n_ao, n_ao))
+
+      ! Iterate over local k-points
+      DO i = kpoints%kp_dist(1, mepos), kpoints%kp_dist(2, mepos)
+         i_local = i - kpoints%kp_dist(1, mepos) + 1
+
+         ! Overlap matrix for this k-point
+         CALL rs_to_kp(overlap_rs(1,:,:,:), s_kp, &
+                       kpoints%index_to_cell, kpoints%xkp(:,i))
+
+         DO j = 1, n_spin
+            ! Hamiltonian matrix for this k-point and spin
+            CALL rs_to_kp(ham_zero_rs(j,:,:,:), h_kp, &
+                          kpoints%index_to_cell, kpoints%xkp(:,i))
+            s_work(:,:) = s_kp(:,:)
+
+            CALL ZHEGV(1, 'V', 'U', n_ao, h_kp, n_ao, &
+                       s_work, n_ao, &
+                       local_eigvals(j,:,i_local), eigwork, lwork, eigrwork, info)
+
+            IF (info /= 0) THEN
+               CPABORT("SBE| Bandstructure: ZHEGV failed for ikp=" // CHAR(i) // " ispin=" // CHAR(j))
+            END IF
+         END DO
+      END DO
+
+      ! Open the file to check if we are on IO rank
+      logger => cp_get_default_logger()
+      unit_nr = cp_print_key_unit_nr(logger, bandstructure_section, extension=".dat", file_position="REWIND")
+
+      ! Allocate gathered array only on IO rank
+      NULLIFY (gathered_eigvals)
+      IF (unit_nr > 0) THEN
+         ALLOCATE (gathered_eigvals(n_spin, n_ao, nkp))
+      ELSE
+         ALLOCATE (gathered_eigvals(0,0,0))
+      END IF
+
+      ! Gather eigenvalues to the IO rank
+      ! We gather spin by spin
+      DO j = 1, n_spin
+         CALL kpoints%para_env%gather( &
+            local_eigvals(j,:,:), &
+            gathered_eigvals(j,:,:) &
+         )
+      END DO
+
+      ! Output on IO rank
+      ! TODO : Prefix for STDOUT
+      ! TODO : Check ordering
+      IF (unit_nr > 0) THEN
+         WRITE (unit_nr, "(A10,A14,A14,A14,A5,A11,A20)") "# kp index", "k_x [b_x]", "k_y [b_y]", "k_z [b_z]", &
+            "spin", "band index", "energy [eV]"
+
+         DO i = 1, nkp
+            DO j = 1, n_spin
+               DO k = 1, n_ao
+                  WRITE (unit_nr, "(I10,E14.6E2,E14.6E2,E14.6E2,I5,I11,E20.8E3)") &
+                     i, xkp(:,i), j, k, gathered_eigvals(j, k, i)*evolt
+               END DO
+            END DO
+         END DO
+         CALL cp_print_key_finished_output(unit_nr, logger, bandstructure_section)
+      END IF
+
+      DEALLOCATE (local_eigvals)
+      DEALLOCATE (h_kp)
+      DEALLOCATE (s_kp)
+      DEALLOCATE (s_work)
+      IF (ASSOCIATED(gathered_eigvals)) DEALLOCATE (gathered_eigvals)
+   END SUBROUTINE print_bandstructure
 END MODULE sbe_io
