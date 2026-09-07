@@ -196,7 +196,7 @@ CONTAINS
          CASE (sbe_kpoints_mpack)
             sbe_env%kpoints%kp_scheme = "MONKHORST-PACK"
             ! Immediately read the dimensions
-            CALL section_vals_val_get(kp_section, "_SECTION_PARAMETERS_", i_vals=mpack_dim)
+            CALL section_vals_val_get(kp_section, "GRID", i_vals=mpack_dim)
             sbe_env%kpoints%nkp_grid(:) = mpack_dim(:)
             sbe_env%kpoints%nkp = PRODUCT(mpack_dim)
             ! Calculate the MONKHORT-PACK grid
