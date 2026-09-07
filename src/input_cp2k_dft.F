@@ -2420,9 +2420,9 @@ CONTAINS
          repeats=.FALSE.)
 
       ! Add grid dimensions
-      CALL keyword_create(keyword, __LOCATION__, name="_SECTION_PARAMETERS_", &
-         description="Defines dimensions for some KPOINT schemes.", &
-         usage="&KPOINTS 4 2 2", &
+      CALL keyword_create(keyword, __LOCATION__, name="GRID", &
+         description="Defines the grid dimensions for MONKHORST-PACK KPOINT scheme.", &
+         usage="GRID 4 2 2", &
          default_i_vals=[1,1,1], &
          type_of_var=integer_t, &
          n_var=3)
