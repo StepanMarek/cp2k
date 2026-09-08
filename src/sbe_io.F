@@ -18,6 +18,7 @@ MODULE sbe_io
                               cp_get_default_logger
    USE cp_output_handling, ONLY: cp_print_key_unit_nr, &
                                  cp_print_key_finished_output, &
+                                 cp_print_key_should_output, &
                                  cp_print_key_generate_filename
    USE physcon, ONLY: femtoseconds, &
                       evolt
@@ -473,6 +474,10 @@ CONTAINS
       REAL(kind=dp), DIMENSION(:,:,:), POINTER           :: gathered_eigvals
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: h_kp, s_kp, s_work
 
+      ! Create the logger to check whether the output is on
+      logger => cp_get_default_logger()
+      IF (cp_print_key_should_output(logger%iter_info, bandstructure_section) == 0) RETURN
+
       n_spin = SIZE(ham_zero_rs, 1)
       n_ao = SIZE(ham_zero_rs, 2)
       mepos = kpoints%para_env%mepos + 1
@@ -512,7 +517,6 @@ CONTAINS
       END DO
 
       ! Open the file to check if we are on IO rank
-      logger => cp_get_default_logger()
       unit_nr = cp_print_key_unit_nr(logger, bandstructure_section, extension=".dat", file_position="REWIND")
 
       ! Allocate gathered array only on IO rank
