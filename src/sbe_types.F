@@ -91,8 +91,8 @@ MODULE sbe_types
       LOGICAL                                            :: apply_delta_pulse = .FALSE.
       REAL(kind=dp), DIMENSION(3,3)                      :: hmat = 0.0_dp
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: time_trace, &
-                                                            eigvals, &
                                                             eigrwork
+      REAL(kind=dp), DIMENSION(:,:), ALLOCATABLE         :: eigvals
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: occ_numbers
       COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER        :: band_occupations => NULL(), &
                                                             gathered_occupations => NULL()
@@ -100,12 +100,12 @@ MODULE sbe_types
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: damping, &
                                                             overlap_kp, &
                                                             inv_overlap_kp, &
-                                                            current_mo_coeffs, &
                                                             grad_work ! dim 1 : rows, dim 2 : cols
       COMPLEX(kind=dp), DIMENSION(:,:,:), ALLOCATABLE    :: damping_work, & ! dim 1 : work index, dim 2 : rows, dim 3 : cols
                                                             densmat_work, & ! dim 1 : work index, dim 2 : rows, dim 3 : cols
                                                             ham_zero_kp, & ! dim 1 : spins, dim 2 : rows, dim 3 : cols
                                                             ham_kp, & ! dim 1 : spins, dim 2 : rows, dim 3 : cols
+                                                            eigvectors, & ! dim 1 : spins, dim 2 : rows, dim 3 : cols
                                                             moments_kp, & ! dim 1 : direction, dim 2 : rows, dim 3 : cols
                                                             overlap_grad ! dim 1 : direction, dim 2 : rows, dim 3 : cols
       TYPE(section_vals_type), POINTER                   :: field_section, &
@@ -287,7 +287,6 @@ CONTAINS
       ALLOCATE (sbe_env%ham_kp(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%moments_kp(3, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%overlap_grad(3, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
-      ALLOCATE (sbe_env%current_mo_coeffs(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ! Allocate density matrix
       ALLOCATE (sbe_env%densmat(sbe_env%n_spin, sbe_env%n_ao, &
                 sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
@@ -297,18 +296,19 @@ CONTAINS
       ! RK4 requires 4, Euler requires 1, damping requires ...
       ALLOCATE (sbe_env%densmat_work(4, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ! Allocate space for eigenvalues
-      ALLOCATE (sbe_env%eigvals(sbe_env%n_ao), source=0.0_dp)
+      ALLOCATE (sbe_env%eigvals(sbe_env%n_spin, sbe_env%n_ao), source=0.0_dp)
+      ALLOCATE (sbe_env%eigvectors(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ! Allocate work for diagonalization routines
       ! Get the lwork by workspace query
       ALLOCATE (sbe_env%eigrwork(3*sbe_env%n_ao - 2), source=0.0_dp)
       ! Execute the workspace query
       CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%ham_zero_kp(1, :, :), &
                  sbe_env%n_ao, sbe_env%overlap_kp(:, :), sbe_env%n_ao, &
-                 sbe_env%eigvals, sbe_env%eigvals, -1, sbe_env%eigrwork, info)
+                 sbe_env%eigvals(1,:), sbe_env%eigvals(1,:), -1, sbe_env%eigrwork, info)
       IF (info /= 0) THEN
          CPABORT("Could not get preffered size of LWORK for ZHEGV.")
       END IF
-      sbe_env%lwork = int(sbe_env%eigvals(1))
+      sbe_env%lwork = int(sbe_env%eigvals(1,1))
       ALLOCATE (sbe_env%eigwork(sbe_env%lwork), source=CMPLX(0.0, 0.0, kind=dp))
       ! Allocate damping term - per spin+kpoint basis
       ALLOCATE (sbe_env%damping(sbe_env%n_ao,sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
@@ -384,7 +384,6 @@ CONTAINS
       DEALLOCATE (sbe_env%overlap_kp)
       DEALLOCATE (sbe_env%inv_overlap_kp)
       DEALLOCATE (sbe_env%overlap_grad)
-      DEALLOCATE (sbe_env%current_mo_coeffs)
 
       DEALLOCATE (sbe_env%ham_zero_rs)
       DEALLOCATE (sbe_env%ham_zero_kp)
@@ -406,6 +405,7 @@ CONTAINS
       DEALLOCATE (sbe_env%eigvals)
       DEALLOCATE (sbe_env%eigwork)
       DEALLOCATE (sbe_env%eigrwork)
+      DEALLOCATE (sbe_env%eigvectors)
 
       DEALLOCATE (sbe_env%damping)
       DEALLOCATE (sbe_env%damping_work)
