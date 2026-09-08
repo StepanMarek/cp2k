@@ -36,6 +36,7 @@ MODULE sbe_methods
              get_damping_term, &
              get_convective_term, &
              bch_exp_propagate, &
+             diagonalize_ham_zero, &
              add_occ_numbers_kp, &
              add_current_kp
 
@@ -86,15 +87,10 @@ CONTAINS
       ! Get the occupations from MOS
       ! CALL get_mo_set(mos(ispin), occupation_numbers=occupations)
       ! Copy input matrices
-      sbe_env%densmat_work(1,:,:) = smat(:, :)
-      sbe_env%densmat_work(2,:,:) = ham(:, :)
-      CALL ZHEGV(1, 'V', 'U', n_ao, sbe_env%densmat_work(2,:,:), n_ao, &
-                 sbe_env%densmat_work(1,:,:), n_ao, &
-                 sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
       ! ham_copy is now overwritten with eigenvectors
       ! Density mat (in contravariant representation) is given as C * P_occ * C^H
       ! Save copy of eigenvectors
-      sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(2,:,:)
+      sbe_env%densmat_work(1,:,:) = sbe_env%eigvectors(ispin,:,:)
       ! Scale C by P_occ (P_occ * C)
       DO i=1,n_ao
          ! ! DEBUG : Non-equilibrium density - transitions 1<->2
@@ -112,18 +108,18 @@ CONTAINS
          !    END IF
          ! END IF
          IF (i > SIZE(occupations)) THEN
-            sbe_env%densmat_work(2,:,i) = 0.0_dp
+            sbe_env%densmat_work(1,:,i) = 0.0_dp
          ELSE
             ! Set up according to occupations
             ! Scales occupations so that the density is still idempotent even in closed shell case
             ! TODO : Can n_spin be different than 1 or 2?
-            sbe_env%densmat_work(2,:,i) = sbe_env%densmat_work(1,:,i) * &
+            sbe_env%densmat_work(1,:,i) = sbe_env%eigvectors(ispin,:,i) * &
                REAL(occupations(i), kind=dp) / REAL(3-sbe_env%n_spin, kind=dp)
          END IF
       END DO
       ! Multiply to get the densmat
-      CALL gemm_square(sbe_env%densmat_work(2,:,:), 'N', &
-                       sbe_env%densmat_work(1,:,:), 'C', densmat(:, :))
+      CALL gemm_square(sbe_env%densmat_work(1,:,:), 'N', &
+                       sbe_env%eigvectors(ispin,:,:), 'C', densmat(:, :))
 
    END SUBROUTINE init_densmat
 ! **************************************************************************************************
@@ -176,22 +172,15 @@ CONTAINS
          RETURN
       END IF
 
-      ! Copy ham_kp and s_kp, in order to not lose them after diagonalization
-      sbe_env%damping_work(1,:,:) = sbe_env%ham_zero_kp(ispin,:,:)
-      sbe_env%damping_work(2,:,:) = sbe_env%overlap_kp(:,:)
-      ! Allocate array for eigenvalues
-      ! Diagonalize
-      CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%damping_work(1,:,:), &
-                 sbe_env%n_ao, sbe_env%damping_work(2,:,:), sbe_env%n_ao, &
-                 sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
-      ! With the diagonals, can get rho_MO
-      CALL gemm_square(sbe_env%damping_work(1,:,:), 'C', &
+      ! Eigenvectors are set inside of sbe_env
+      ! Determine rho_MO
+      CALL gemm_square(sbe_env%eigvectors(ispin,:,:), 'C', &
                        sbe_env%overlap_kp(:,:), 'N', &
                        densmat, 'N', &
-                       sbe_env%damping_work(2,:,:))
-      CALL gemm_square(sbe_env%damping_work(2,:,:), 'N', &
+                       sbe_env%damping_work(1,:,:))
+      CALL gemm_square(sbe_env%damping_work(1,:,:), 'N', &
                        sbe_env%overlap_kp(:,:), 'N', &
-                       sbe_env%damping_work(1,:,:), 'N', &
+                       sbe_env%eigvectors(ispin,:,:), 'N', &
                        damping_term)
       ! damping_term now contains rho^MO
       ! Set the diagonal to zero - no damping on the diagonal
@@ -202,6 +191,14 @@ CONTAINS
       END DO
       !$OMP END PARALLEL DO
 
+      ! Transfer back to AO
+      CALL gemm_square(sbe_env%eigvectors(ispin,:,:),"N", &
+                       damping_term, "N", &
+                       sbe_env%damping_work(1,:,:))
+      CALL gemm_square(sbe_env%damping_work(1,:,:),"N", &
+                       sbe_env%eigvectors(ispin,:,:), "C", &
+                       damping_term)
+      ! Damping term now contains rho_AO with MO-diagonals set to zero
       ! To finish the damping term, divide by T_2 time, multiply by correct sign
       ! TODO : OMP?
       damping_term(:,:) = -damping_term(:,:) / sbe_env%dephasing_time
@@ -496,4 +493,42 @@ CONTAINS
 
       CALL timestop(handle)
    END SUBROUTINE bch_exp_propagate
+! **************************************************************************************************
+!> \brief Diagonalizes the equilibrium Hamiltonian currently stored in sbe_env, i.e. at the current kp
+!> \note Assumes that sbe_env%ham_zero_kp has been correctly determined
+!> \param sbe_env SBE ENV
+!> \author Stepan Marek
+!> \date 09.2026
+! **************************************************************************************************
+   SUBROUTINE diagonalize_ham_zero(sbe_env, ispin_opt)
+      TYPE(sbe_env_type)                                    :: sbe_env
+      INTEGER, OPTIONAL                                     :: ispin_opt
+      CHARACTER(len=*), PARAMETER                           :: routineN="diagonalize_ham_zero"
+      INTEGER                                               :: handle, &
+                                                               ispin, &
+                                                               info, low, high
+
+      CALL timeset(routineN, handle)
+
+      IF (PRESENT(ispin_opt)) THEN
+         low = ispin_opt
+         high = ispin_opt
+      ELSE
+         low = 1
+         high = sbe_env%n_spin
+      END IF
+      DO ispin=low,high
+         sbe_env%damping_work(1,:,:) = sbe_env%ham_zero_kp(ispin,:,:)
+         ! damping_work(2,:,:) gets overwritten by ZHEGV
+         sbe_env%damping_work(2,:,:) = sbe_env%overlap_kp(:,:)
+         CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%damping_work(1,:,:), sbe_env%n_ao, &
+                    sbe_env%damping_work(2,:,:), sbe_env%n_ao, &
+                    sbe_env%eigvals(ispin,:), &
+                    sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
+         IF (info /= 0) CPABORT("Failed to diagonalize ham_zero_kp!")
+         sbe_env%eigvectors(ispin,:,:) = sbe_env%damping_work(1,:,:)
+      END DO
+
+      CALL timestop(handle)
+   END SUBROUTINE diagonalize_ham_zero
 END MODULE sbe_methods
