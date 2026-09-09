@@ -3462,13 +3462,13 @@ CONTAINS
 !> \param rcc ...
 !> \author Shridhar Shanbhag
 ! **************************************************************************************************
-   SUBROUTINE build_local_moment_matrix_rs_img(qs_env, moments_rs_img, rcc, sab_opt)
+   SUBROUTINE build_local_moment_matrix_rs_img(qs_env, moments_rs_img, rcc, sab_ext)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: moments_rs_img
       REAL(KIND=dp), DIMENSION(3), OPTIONAL              :: rcc
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-         POINTER, OPTIONAL                               :: sab_opt
+         POINTER, OPTIONAL                               :: sab_ext
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'build_local_moment_matrix_rs_img'
 
@@ -3506,8 +3506,8 @@ CONTAINS
                       particle_set=particle_set, &
                       cell=cell, &
                       para_env=para_env)
-      IF (PRESENT(sab_opt)) THEN
-         sab_all => sab_opt
+      IF (PRESENT(sab_ext)) THEN
+         sab_all => sab_ext
       ELSE
          CALL get_qs_env(qs_env=qs_env, &
                          sab_all=sab_all)
