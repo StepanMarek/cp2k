@@ -275,13 +275,15 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 08.2026
 ! **************************************************************************************************
-   SUBROUTINE output_occupations_kp_file(sbe_env, local_occupations, gathered_occupations, headers_opt)
+   SUBROUTINE output_occupations_kp_file(sbe_env, local_occupations, gathered_occupations, headers_opt, &
+         vacancy_opt)
       TYPE(sbe_env_type), INTENT(IN)                     :: sbe_env
       COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER, &
          INTENT(IN)                                      :: local_occupations
       COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER, &
          INTENT(OUT)                                     :: gathered_occupations
-      LOGICAL, OPTIONAL, INTENT(IN)                      :: headers_opt
+      LOGICAL, OPTIONAL, INTENT(IN)                      :: headers_opt, &
+                                                            vacancy_opt
       CHARACTER(len=*), PARAMETER                        :: routineN = "output_occupations_kp_file"
       TYPE(cp_logger_type), POINTER                      :: logger
       INTEGER                                            :: handle, &
@@ -293,7 +295,8 @@ CONTAINS
                                                             n_ao, &
                                                             occ_unit
       CHARACTER(len=20), DIMENSION(:), ALLOCATABLE       :: headers
-      LOGICAL                                            :: do_headers
+      LOGICAL                                            :: do_headers, &
+                                                            do_vacancies
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: xvals
 
       CALL timeset(routineN, handle)
@@ -303,6 +306,8 @@ CONTAINS
       n_ao = sbe_env%n_ao
       do_headers = .FALSE.
       IF (PRESENT(headers_opt)) do_headers = headers_opt
+      do_vacancies = .FALSE.
+      IF (PRESENT(vacancy_opt)) do_vacancies = vacancy_opt
       ! Do matrix gather for each spin channel
       DO ispin=1, n_spin
          CALL sbe_env%kpoints%para_env%gather( &
@@ -314,7 +319,14 @@ CONTAINS
       ! Open the file
       logger => cp_get_default_logger()
 
-      occ_unit = cp_print_key_unit_nr(logger, sbe_env%occ_kp_section, extension=".dat")
+      IF (do_vacancies) THEN
+         occ_unit = cp_print_key_unit_nr(logger, sbe_env%occ_kp_section, extension="_vacant.dat")
+         IF (occ_unit > 0) THEN
+            gathered_occupations(:,:,:) = 1.0_dp - gathered_occupations(:,:,:)
+         END IF
+      ELSE
+         occ_unit = cp_print_key_unit_nr(logger, sbe_env%occ_kp_section, extension=".dat")
+      END IF
 
       IF (do_headers) THEN
          ! Prepare the headers

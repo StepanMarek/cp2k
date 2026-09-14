@@ -368,9 +368,11 @@ CONTAINS
             header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.FALSE.)
          CALL output_occupation_file(sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%occ_section, &
             header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.TRUE.)
-         ! TODO : Vacancies
+         ! k-resolved
          CALL output_occupations_kp_file(sbe_env, sbe_env%band_occupations, sbe_env%gathered_occupations, &
             headers_opt = (i_step == sbe_env%sim_start_orig))
+         CALL output_occupations_kp_file(sbe_env, sbe_env%band_occupations, sbe_env%gathered_occupations, &
+            headers_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.TRUE.)
          ! Output the Hermiticity violation
          CALL output_nonherm_metric(sbe_env%densmat_next, sbe_env%unit_nr)
          ! Set the current density matrix for the next step
