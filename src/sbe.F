@@ -33,12 +33,11 @@ MODULE sbe
    USE sbe_io,                         ONLY: output_field, &
                                              output_occupation_file, &
                                              print_mat, &
-                                             output_nonidempot_metric, &
                                              gather_occupations, &
                                              output_occupations_kp_file, &
                                              output_ham_rs_restart, &
                                              read_ham_rs_restart, &
-                                             output_nonherm_metric , &
+                                             output_run_info, &
                                              print_bandstructure
    USE sbe_utils,                      ONLY: print_sbe_header_info
    USE sbe_types,                      ONLY: sbe_env_type, &
@@ -51,8 +50,8 @@ MODULE sbe
                                              get_damping_term, &
                                              bch_exp_propagate, &
                                              add_occ_numbers_kp, &
-                                             diagonalize_ham_zero, &
-                                             add_current_kp
+                                             diagonalize_ham_zero! , &
+                                             ! add_current_kp
    USE cp_dbcsr_api,                   ONLY: dbcsr_p_type, &
                                              dbcsr_type, &
                                              dbcsr_create, &
@@ -114,7 +113,7 @@ CONTAINS
               POINTER                                    :: sab_nl
       TYPE(sbe_env_type), POINTER                        :: sbe_env
       REAL(kind=dp)                                      :: total_n, lambda, buffer, max_buffer
-      COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
+      ! COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
       TYPE(cp_logger_type), POINTER                      :: logger
       REAL(kind=dp), DIMENSION(:), POINTER               :: ref_custom
 
@@ -253,8 +252,6 @@ CONTAINS
             CALL init_densmat(sbe_env%densmat(j,:,:,i_local), j, &
                               sbe_env%ham_zero_kp(j,:,:), sbe_env%overlap_kp, &
                               qs_env, sbe_env)
-            ! CALL output_nonidempot_metric(sbe_env%densmat(:,:,:,i_local), sbe_env%overlap_kp, &
-            !    sbe_env%densmat_work, sbe_env%unit_nr)
          END DO
       END DO
 
@@ -288,7 +285,7 @@ CONTAINS
 
          ! Reset occupation numbers
          sbe_env%occ_numbers(:,:) = 0.0_dp
-         total_current(:) = CMPLX(0.0, 0.0, kind=dp)
+         ! total_current(:) = CMPLX(0.0, 0.0, kind=dp)
 
          ! Iteration over local kpoints
          ! TODO : Run OMP over local kpoints or not?
@@ -306,7 +303,6 @@ CONTAINS
             ! Actual propagation of the density rho(t) -> rho(t+dt)
             DO j=1,sbe_env%n_spin
                ! Log max idempotency violation in this k-point cycle
-               ! DEBUG : Idempotency violation printing
                buffer = nonidempot_metric(sbe_env%densmat(j,:,:,i_local), sbe_env%overlap_kp, sbe_env%densmat_work)
                ! ! DEBUG : Hermiticity violation printing
                ! buffer = nonherm_metric(sbe_env%ham_zero_kp(j,:,:))
@@ -333,52 +329,52 @@ CONTAINS
             ! Export observables
             ! Per-kpoint operations - add occ_numbers
             CALL add_occ_numbers_kp(sbe_env, sbe_env%occ_numbers, sbe_env%densmat_next(:,:,:,i_local), i)
-            ! add current
+            ! TODO : add current
             ! TODO : Spin
-            CALL add_current_kp(sbe_env, sbe_env%densmat(1,:,:,i_local), sbe_env%kpoints%xkp(:,i), 1, total_current(:), i)
+            ! CALL add_current_kp(sbe_env, sbe_env%densmat(1,:,:,i_local), sbe_env%kpoints%xkp(:,i), 1, total_current(:), i)
          END DO
          ! Info can report e.g. self-consistency failures
          IF (info > 0) THEN
             CALL cp_abort(__LOCATION__, "Failed to propagate the density matrix.")
          END IF
 
-         ! Idempotency violation
-         ! TODO : MPI max?
-         PRINT *, "SBE| Idempotency violation", max_buffer
+         ! Sum over the occupation numbers across all ranks
+         ! TODO : Could be redone via gather, might be faster. Also check when necessary?
+         !        (definitely when printing occupations or run_info)
+         CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
 
          ! Increment iterations
          CALL cp_iterate(logger%iter_info, iter_nr=i_step, last=(i_step == sbe_env%sim_nsteps))
          ! Outputs
-         ! Sum over the occupation numbers across all ranks
-         ! TODO : Could be redone via gather, might be faster
-         CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
-         CALL sbe_env%kpoints%para_env%sum(total_current)
-         ! DEBUG : total occ number, TODO : Difference to equilibrium
-         ! TODO : Idempotency metric
-         total_n = SUM(sbe_env%occ_numbers(1,:)) * sbe_env%n_spin
-         IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E20.8E3)") &
-            " SBE| Timestep ", i_step, &
-            " time ", sbe_env%sim_time * femtoseconds, " N ", total_n
-         IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E20.8E3,E20.8E3,E20.8E3)") &
-            " SBE| Timestep ", i_step, &
-            " time ", sbe_env%sim_time * femtoseconds, " current ", &
-            REAL(total_current(1)), REAL(total_current(2)), REAL(total_current(3))
+
+         ! Run info
+         CALL output_run_info(sbe_env, max_buffer)
+
+         ! TODO : current calculation in AO
+         ! CALL sbe_env%kpoints%para_env%sum(total_current)
+         ! IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E20.8E3,E20.8E3,E20.8E3)") &
+         !    " SBE| Timestep ", i_step, &
+         !    " time ", sbe_env%sim_time * femtoseconds, " current ", &
+         !    REAL(total_current(1)), REAL(total_current(2)), REAL(total_current(3))
+
          ! Output occupations/vacancies into files
          CALL output_occupation_file(sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%occ_section, &
             header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.FALSE.)
          CALL output_occupation_file(sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%occ_section, &
             header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.TRUE.)
+
          ! k-resolved
          CALL output_occupations_kp_file(sbe_env, sbe_env%band_occupations, sbe_env%gathered_occupations, &
             headers_opt = (i_step == sbe_env%sim_start_orig))
          CALL output_occupations_kp_file(sbe_env, sbe_env%band_occupations, sbe_env%gathered_occupations, &
             headers_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.TRUE.)
-         ! Output the Hermiticity violation
-         CALL output_nonherm_metric(sbe_env%densmat_next, sbe_env%unit_nr)
+
          ! Set the current density matrix for the next step
          sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
+
          ! Update the vector potential - A(t+dt) = A(t) - E(t) dt
          sbe_env%vector_potential(:) = sbe_env%vector_potential(:) - sbe_env%sim_dt * sbe_env%field(:)
+
       END DO
 
       ! Stop iteratons
