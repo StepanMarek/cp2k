@@ -83,7 +83,8 @@ CONTAINS
          ! TODO: this only works for even number of electrons
          occupations(i) = mos(ispin)%maxocc
       END DO
-      ! TODO : Sanity checks
+      ! TODO : Sanity checks, use this in case of SCF
+      ! TODO : Maybe just save the occupations together with the Ham. Restart?
       ! Get the occupations from MOS
       ! CALL get_mo_set(mos(ispin), occupation_numbers=occupations)
       ! Copy input matrices

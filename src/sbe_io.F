@@ -44,11 +44,10 @@ MODULE sbe_io
             output_occupation_file, &
             output_occupations_kp_file, &
             print_mat, &
-            output_nonidempot_metric, &
             gather_occupations, &
             output_ham_rs_restart, &
             read_ham_rs_restart, &
-            output_nonherm_metric, &
+            output_run_info, &
             print_bandstructure
 
 CONTAINS
@@ -157,69 +156,6 @@ CONTAINS
       DEALLOCATE (z_occ)
 
    END SUBROUTINE output_occupation_file
-! **************************************************************************************************
-!> \brief Outputs the maximum non-hermitian metric among several matrices
-!> \param densmat 3D array, with two middle dimensions matrix rows and columns
-!> \param unit_nr Number of the output unit (determined elsewhere)
-!> \author Stepan Marek
-!> \date 07.2026
-! **************************************************************************************************
-   SUBROUTINE output_nonherm_metric(densmat, unit_nr)
-      COMPLEX(kind=dp), DIMENSION(:,:,:,:)               :: densmat
-      INTEGER                                            :: unit_nr
-
-      INTEGER                                            :: ispin, i, j, ikp_local, &
-                                                            nspin, n_ao, nkp_local
-      REAL(kind=dp)                                      :: buffer, max_buffer
-
-      nspin = SIZE(densmat, 1)
-      n_ao = SIZE(densmat, 2)
-      nkp_local = SIZE(densmat, 4)
-      buffer = 0.0_dp
-      max_buffer = 0.0_dp
-
-      ! Iterate over all dimensions
-      DO ispin=1, nspin
-         DO ikp_local=1, nkp_local
-            buffer = nonherm_metric(densmat(ispin,:,:,ikp_local))
-            IF (buffer > max_buffer) max_buffer = buffer
-         END DO
-      END DO
-      ! Maximum found
-      IF (unit_nr > 0) WRITE (unit_nr, "(A28,E52.8E3)") " SBE| Max non-hermitian part", max_buffer
-   END SUBROUTINE output_nonherm_metric
-! **************************************************************************************************
-!> \brief Outputs the maximum non-idempotent metric among several matrices
-!> \param densmat 3D array, with two last dimensions matrix rows and columns
-!> \param smat overlap matrix
-!> \param work Density matrix workspace, at least 2 matrices
-!> \param unit_nr Number of the output unit (determined elsewhere)
-!> \author Stepan Marek
-!> \date 07.2026
-! **************************************************************************************************
-   SUBROUTINE output_nonidempot_metric(densmat, smat, work, unit_nr)
-      COMPLEX(kind=dp), DIMENSION(:,:,:)                 :: densmat
-      COMPLEX(kind=dp), DIMENSION(:,:)                   :: smat
-      COMPLEX(kind=dp), DIMENSION(:,:,:)                 :: work
-      INTEGER                                            :: unit_nr
-
-      INTEGER                                            :: ispin, i, j, ikp_local, &
-                                                            nspin, n_ao, nkp_local
-      REAL(kind=dp)                                      :: buffer, max_buffer
-
-      nspin = SIZE(densmat, 1)
-      n_ao = SIZE(densmat, 2)
-      buffer = 0.0_dp
-      max_buffer = 0.0_dp
-
-      ! Iterate over all dimensions
-      DO ispin=1, nspin
-         buffer = nonidempot_metric(densmat(ispin,:,:), smat, work)
-         IF (buffer > max_buffer) max_buffer = buffer
-      END DO
-      ! Maximum found
-      WRITE (unit_nr, "(A29,E51.8E3)") " SBE| Max non-idempotent part", max_buffer
-   END SUBROUTINE output_nonidempot_metric
 ! **************************************************************************************************
 !> \brief Pretty prints a complex matrix
 !> \param mat Matrix to be pretty printed
@@ -572,4 +508,74 @@ CONTAINS
       DEALLOCATE (s_work)
       IF (ASSOCIATED(gathered_eigvals)) DEALLOCATE (gathered_eigvals)
    END SUBROUTINE print_bandstructure
+! **************************************************************************************************
+!> \brief Prints various updated about the current loop
+!> \param sbe_env SBE environment
+!> \param max_idempot Maximum idempotency deviation within the kpoints controlled by this rank
+!> \note The idempotency is given as argument since it requires S matrix, which is only kept on a
+!>       per-kpoint basis. Hence, the maximum deviation is calculated during the propagation step,
+!>       in order to not recalculate S matrix at each kpoint
+!> \author Stepan Marek
+!> \date 09.2026
+! **************************************************************************************************
+   SUBROUTINE output_run_info(sbe_env, max_idempot)
+      TYPE(sbe_env_type), INTENT(IN)                     :: sbe_env
+      REAL(kind=dp), INTENT(INOUT)                       :: max_idempot
+      CHARACTER(len=*), PARAMETER                        :: routineN="output_run_info"
+      TYPE(cp_logger_type), POINTER                      :: logger
+      INTEGER                                            :: ispin, &
+                                                            ikp_local, &
+                                                            unit_nr, &
+                                                            handle
+      REAL(kind=dp)                                      :: max_herm, buffer, total_n
+
+      ! Get the logger
+      logger => cp_get_default_logger()
+
+      ! Only proceed if the print-key should output
+      IF (cp_print_key_should_output(logger%iter_info, sbe_env%run_info_section) == 0) RETURN
+
+      CALL timeset(routineN, handle)
+
+      ! Get the output unit
+      unit_nr = cp_print_key_unit_nr(logger, sbe_env%run_info_section, extension=".runinfo")
+
+      ! Determine the maximum among all ranks
+      ! NOTE : Idempotency deviation is from starting (not propagated) density
+      CALL sbe_env%kpoints%para_env%max(max_idempot)
+
+      ! Determine the Hermiticity deviation
+      ! NOTE : Hermiticity deviation is from starting (not propagated) density
+      ! Within this rank
+      max_herm = 0.0_dp
+      DO ispin=1, sbe_env%n_spin
+         DO ikp_local=1, sbe_env%local_nkp
+            buffer = nonherm_metric(sbe_env%densmat(ispin,:,:,ikp_local))
+            IF (buffer > max_herm) max_herm = buffer
+         END DO
+      END DO
+
+      ! Across all ranks
+      CALL sbe_env%kpoints%para_env%max(max_herm)
+
+      ! Get the total number of electrons
+      total_n = 0.0_dp
+      DO ispin=1, sbe_env%n_spin
+
+         ! Scale by spin degeneracy
+         total_n = total_n + SUM(sbe_env%occ_numbers(ispin,:)) * REAL(3-sbe_env%n_spin, kind=dp)
+
+      END DO
+
+      ! Proceed to printing
+      IF (unit_nr > 0) WRITE(unit_nr, "(A15,I12,A6,"//dformat//",A7,"//dformat//")") &
+         " SBE| Timestep ", sbe_env%sim_step, &
+         " time ", sbe_env%sim_time * femtoseconds, &
+         " dN ", total_n-REAL(sbe_env%n_elec_ref, kind=dp)
+      IF (unit_nr > 0) WRITE(unit_nr, "(A20,"//dformat//",A20,"//dformat//")") &
+         " SBE| idempot. dev. ", max_idempot, &
+         " herm. dev. ", max_herm
+
+      CALL timestop(handle)
+   END SUBROUTINE output_run_info
 END MODULE sbe_io

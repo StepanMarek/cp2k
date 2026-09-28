@@ -34,6 +34,7 @@ MODULE sbe_types
                                   section_vals_get, &
                                   section_vals_val_get
    USE post_scf_bandstructure_utils, ONLY: compute_xkp
+   USE qs_mo_types, ONLY: mo_set_type
    USE qs_moments, ONLY: build_local_moment_matrix_rs_img
    USE moments_utils, ONLY: get_reference_point
    USE cp_log_handling, ONLY: cp_logger_get_default_io_unit, &
@@ -72,6 +73,7 @@ MODULE sbe_types
       INTEGER                                            :: n_ao = 0, &
                                                             n_images = 0, &
                                                             n_spin = 1, &
+                                                            n_elec_ref = 0, & ! Equilibrium/reference number of electrons
                                                             unit_nr = 6, &
                                                             sim_nsteps = -1, &
                                                             sim_start = 0, &
@@ -112,7 +114,8 @@ MODULE sbe_types
                                                             occ_kp_section, &
                                                             ham_rs_restart_section, &
                                                             bandstructure_section, &
-                                                            occ_section
+                                                            occ_section, &
+                                                            run_info_section
    END TYPE sbe_env_type
 
    PUBLIC :: sbe_env_type, &
@@ -138,6 +141,7 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_s_kp, &
                                                             matrix_ks_kp
       TYPE(cell_type), POINTER                           :: cell
@@ -177,6 +181,7 @@ CONTAINS
       sbe_env%occ_kp_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%OCCUPATIONS_KP")
       sbe_env%ham_rs_restart_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%RESTART_HAM")
       sbe_env%bandstructure_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%BANDSTRUCTURE")
+      sbe_env%run_info_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%PROGRAM_RUN_INFO")
       ! Save dft_control pointer - necessary for make_field during propagation
       sbe_env%dft_control => dft_control
       ! Save cell - need for k-gradient construction during propagation
@@ -364,6 +369,12 @@ CONTAINS
             WRITE (sbe_env%unit_nr, "(A23,L57)") " SBE| Apply delta pulse", .FALSE.
          END IF
       END IF
+
+      ! Log the equilibrium number of electrons
+      CALL get_qs_env(qs_env, mos=mos)
+      DO i=1, sbe_env%n_spin
+         sbe_env%n_elec_ref = sbe_env%n_elec_ref + mos(i)%nelectron
+      END DO
 
       CALL timestop(handle)
    END SUBROUTINE init_sbe_env
