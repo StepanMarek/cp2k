@@ -342,12 +342,16 @@ CONTAINS
       phase_factor = CMPLX(COS(twopi*SUM(xkp(:)*index_to_cell(:, imindex))), &
                            SIN(twopi*SUM(xkp(:)*index_to_cell(:, imindex))), kind=dp)
 
-      DO i = 1, SIZE(ks_array_out, 1)
-         DO j = 1, SIZE(ks_array_out, 2)
+      !$OMP PARALLEL DO DEFAULT(none) &
+      !$OMP PRIVATE(i,j) &
+      !$OMP SHARED(ks_array_out, rs_array_in, deriv_factor, phase_factor)
+      DO j = 1, SIZE(ks_array_out, 2)
+         DO i = 1, SIZE(ks_array_out, 1)
             ks_array_out(i, j) = ks_array_out(i, j) + &
                                  deriv_factor*phase_factor*rs_array_in(i, j)
          END DO
       END DO
+      !$OMP END PARALLEL DO
    END SUBROUTINE add_rs_to_kp
 ! **************************************************************************************************
 !> \brief Adds given kpoint matrix to all rs matrices
