@@ -181,6 +181,7 @@ QS/regtest-dft-vdw-corr-4                                   libdftd4
 QS/regtest-pod
 QS/regtest-dft-d4-auto-ref                                  libdftd4 libint libxc
 QS/regtest-rtbse                                            libint
+QS/regtest-sbe                                              libint !ifx
 QS/regtest-skala-native-gpw-coords                          skala
 QS/regtest-stda-force-3                                     libint
 QS/regtest-gw2x                                             libint libxc

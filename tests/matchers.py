@@ -843,6 +843,9 @@ registry["Harris_direct_trial_energy"] = GenericMatcher(
 registry["Harris_direct_energy_difference"] = GenericMatcher(
     r"Trial-DM minus Harris-like energy:", col=5
 )
+
+# SBE
+registry["SBE_H2_OCC"] = GenericMatcher(r"SBE_OCC\|\s+0.250+", col=5, regex=True)
 # EOF
 
 registry["LOCALIZER_GAP"] = GenericMatcher("SPECTRAL_LOCALIZER| Gap [hartree]:", col=4)

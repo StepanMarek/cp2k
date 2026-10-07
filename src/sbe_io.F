@@ -15,6 +15,7 @@ MODULE sbe_io
    USE input_section_types, ONLY: section_vals_type
    USE kpoint_types, ONLY: kpoint_type
    USE cp_log_handling, ONLY: cp_logger_type, &
+                              cp_logger_get_default_io_unit, &
                               cp_get_default_logger
    USE cp_output_handling, ONLY: cp_print_key_unit_nr, &
                                  cp_print_key_finished_output, &
@@ -97,33 +98,54 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 07.2026
 ! **************************************************************************************************
-   SUBROUTINE output_occupation_file(occ_numbers, time, occupation_print_section, &
+   SUBROUTINE output_occupation_file(occ_numbers, time, occupation_print_section, integrand_dist, &
          header_opt, vacancy_opt)
       COMPLEX(kind=dp), DIMENSION(:)                     :: occ_numbers
       REAL(kind=dp)                                      :: time
       TYPE(section_vals_type)                            :: occupation_print_section
+      INTEGER, DIMENSION(:,:), INTENT(IN)                :: integrand_dist
       LOGICAL, OPTIONAL                                  :: header_opt
       LOGICAL, OPTIONAL                                  :: vacancy_opt
 
-      LOGICAL                                            :: do_headers
-      LOGICAL                                            :: do_vacancies
+      LOGICAL                                            :: do_headers, &
+                                                            do_vacancies, &
+                                                            do_prefix
       CHARACTER(len=20), DIMENSION(:), ALLOCATABLE       :: headers
+      CHARACTER(len=21)                                  :: prefix
+      CHARACTER(len=5)                                   :: prefix_format
       TYPE(cp_logger_type), POINTER                      :: logger
       COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: z_occ
       REAL(kind=dp), DIMENSION(1)                        :: a_time
-      INTEGER                                            :: n_occ, i, occ_unit
+      INTEGER                                            :: n_occ, &
+                                                            i, &
+                                                            occ_unit, &
+                                                            integrand_nkp
 
       do_headers = .FALSE.
       IF (PRESENT(header_opt)) do_headers = header_opt
       do_vacancies = .FALSE.
       IF (PRESENT(vacancy_opt)) do_vacancies = vacancy_opt
 
+      logger => cp_get_default_logger()
+
+      ! TODO : Do determination of validity of output in a different way?
+      integrand_nkp = 0
+      DO i=1, SIZE(integrand_dist, 2)
+         integrand_nkp = integrand_nkp + integrand_dist(2,i) - integrand_dist(1,i) + 1
+      END DO
+
+      IF (integrand_nkp <= 0) THEN
+         IF (cp_print_key_should_output(logger%iter_info, occupation_print_section) /= 0) THEN
+            ! Warn the user
+            CPWARN("Printing of integrated observable (occupation) not possible -- no integrable k-grid.")
+         END IF
+         RETURN
+      END IF
+
       a_time(1) = time
 
       n_occ = SIZE(occ_numbers)
       ALLOCATE (z_occ(n_occ,1))
-
-      logger => cp_get_default_logger()
 
       IF (do_vacancies) THEN
          z_occ(:,1) = CMPLX(1.0, 0.0, kind=dp)-occ_numbers(:)
@@ -133,6 +155,17 @@ CONTAINS
          occ_unit = cp_print_key_unit_nr(logger, occupation_print_section, extension=".dat")
       END IF
 
+      ! Determine, whether prefix is necessary
+      prefix=""
+      prefix_format="(A9)"
+      do_prefix = .FALSE.
+      IF (occ_unit == cp_logger_get_default_io_unit(logger)) THEN
+         do_prefix = .TRUE.
+         prefix=" SBE_OCC|"
+         IF (do_vacancies) THEN
+            prefix=" SBE_VAC|"
+         END IF
+      END IF
 
       IF (do_headers) THEN
          ALLOCATE (headers(2*n_occ+1))
@@ -140,17 +173,27 @@ CONTAINS
          WRITE (headers(1),'(A20)') "# Time [fs]         "
          DO i=2,2*n_occ+1
             IF (MODULO(i, 2) == 1) THEN
-               WRITE (headers(i),'(A10,I8,A2)') "Im       n", (i-1)/2, "  "
+               WRITE (headers(i),'(A12,I8)') "  Im       n", (i-1)/2
             ELSE
-               WRITE (headers(i),'(A10,I8,A2)') "Re       n", i/2, "  "
+               WRITE (headers(i),'(A12,I8)') "  Re       n", i/2
             END IF
          END DO
 
-         CALL print_rt_file(occ_unit, headers, a_time, z_occ, xscale_opt=femtoseconds)
+         IF (do_prefix) THEN
+            CALL print_rt_file(occ_unit, headers, a_time, z_occ, xscale_opt=femtoseconds, &
+               prefix=prefix, prefix_format=prefix_format)
+         ELSE
+            CALL print_rt_file(occ_unit, headers, a_time, z_occ, xscale_opt=femtoseconds)
+         END IF
 
          DEALLOCATE (headers)
       ELSE
-         CALL print_rt_file(occ_unit, xvals=a_time, yvals=z_occ, xscale_opt=femtoseconds)
+         IF (do_prefix) THEN
+            CALL print_rt_file(occ_unit, xvals=a_time, yvals=z_occ, xscale_opt=femtoseconds, &
+               prefix=prefix, prefix_format=prefix_format)
+         ELSE
+            CALL print_rt_file(occ_unit, xvals=a_time, yvals=z_occ, xscale_opt=femtoseconds)
+         END IF
       END IF
 
       DEALLOCATE (z_occ)
@@ -221,6 +264,8 @@ CONTAINS
       LOGICAL, OPTIONAL, INTENT(IN)                      :: headers_opt, &
                                                             vacancy_opt
       CHARACTER(len=*), PARAMETER                        :: routineN = "output_occupations_kp_file"
+      CHARACTER(len=5), PARAMETER                        :: prefix_format = "(A12)"
+      CHARACTER(len=21)                                  :: prefix
       TYPE(cp_logger_type), POINTER                      :: logger
       INTEGER                                            :: handle, &
                                                             ispin, &
@@ -232,7 +277,8 @@ CONTAINS
                                                             occ_unit
       CHARACTER(len=20), DIMENSION(:), ALLOCATABLE       :: headers
       LOGICAL                                            :: do_headers, &
-                                                            do_vacancies
+                                                            do_vacancies, &
+                                                            do_prefix
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: xvals
 
       CALL timeset(routineN, handle)
@@ -244,6 +290,21 @@ CONTAINS
       IF (PRESENT(headers_opt)) do_headers = headers_opt
       do_vacancies = .FALSE.
       IF (PRESENT(vacancy_opt)) do_vacancies = vacancy_opt
+
+      ! Check whether we should output or not
+      logger => cp_get_default_logger()
+      IF (cp_print_key_should_output(logger%iter_info, sbe_env%occ_kp_section) == 0) THEN
+         CALL timestop(handle)
+         RETURN
+      END IF
+
+      ! Exit and warn when no kset is provided
+      IF (SIZE(gathered_occupations) == 0) THEN
+         CPWARN("Cannot provide k-resolved observable -- no KPOINT_SET.")
+         CALL timestop(handle)
+         RETURN
+      END IF
+
       ! Do matrix gather for each spin channel
       DO ispin=1, n_spin
          CALL sbe_env%kpoints%para_env%gather( &
@@ -253,8 +314,6 @@ CONTAINS
       END DO
 
       ! Open the file
-      logger => cp_get_default_logger()
-
       IF (do_vacancies) THEN
          occ_unit = cp_print_key_unit_nr(logger, sbe_env%occ_kp_section, extension="_vacant.dat")
          IF (occ_unit > 0) THEN
@@ -274,6 +333,17 @@ CONTAINS
          END DO
       END IF
 
+      do_prefix = .FALSE.
+      prefix = ""
+      IF (occ_unit == cp_logger_get_default_io_unit(logger)) THEN
+         do_prefix = .TRUE.
+         IF (do_vacancies) THEN
+            prefix = " SBE_VAC_KP|"
+         ELSE
+            prefix = " SBE_OCC_KP|"
+         END IF
+      END IF
+
       ALLOCATE (xvals(nkp), source=REAL(0.0, kind=dp))
       DO ikp=1, nkp
          xvals(ikp) = REAL(ikp, kind=dp)
@@ -282,14 +352,28 @@ CONTAINS
       ! DEBUG : spin
       ispin = 1
       IF (do_headers) THEN
-         IF (occ_unit > 0) CALL print_rt_file(occ_unit, xvals=xvals, &
-            yvals=gathered_occupations(ispin, :, :), &
-            headers=headers, comp_opt=rt_file_comp_real)
+         IF (do_prefix) THEN
+            CALL print_rt_file(occ_unit, xvals=xvals, &
+               yvals=gathered_occupations(ispin, :, :), &
+               headers=headers, comp_opt=rt_file_comp_real, &
+               prefix=prefix, prefix_format=prefix_format)
+         ELSE
+            CALL print_rt_file(occ_unit, xvals=xvals, &
+               yvals=gathered_occupations(ispin, :, :), &
+               headers=headers, comp_opt=rt_file_comp_real)
+         END IF
          DEALLOCATE (headers)
       ELSE
-         IF (occ_unit > 0) CALL print_rt_file(occ_unit, xvals=xvals, &
-            yvals=gathered_occupations(ispin, :, :), &
-            comp_opt=rt_file_comp_real)
+         IF (do_prefix) THEN
+            CALL print_rt_file(occ_unit, xvals=xvals, &
+               yvals=gathered_occupations(ispin, :, :), &
+               comp_opt=rt_file_comp_real, &
+               prefix=prefix, prefix_format=prefix_format)
+         ELSE
+            CALL print_rt_file(occ_unit, xvals=xvals, &
+               yvals=gathered_occupations(ispin, :, :), &
+               comp_opt=rt_file_comp_real)
+         END IF
       END IF
 
       DEALLOCATE (xvals)
@@ -560,12 +644,14 @@ CONTAINS
 
       ! Get the total number of electrons
       total_n = 0.0_dp
-      DO ispin=1, sbe_env%n_spin
+      IF (sbe_env%integrand_nkp > 0) THEN
+         DO ispin=1, sbe_env%n_spin
 
-         ! Scale by spin degeneracy
-         total_n = total_n + SUM(sbe_env%occ_numbers(ispin,:)) * REAL(3-sbe_env%n_spin, kind=dp)
+            ! Scale by spin degeneracy
+            total_n = total_n + SUM(sbe_env%occ_numbers(ispin,:)) * REAL(3-sbe_env%n_spin, kind=dp)
 
-      END DO
+         END DO
+      END IF
 
       ! Proceed to printing
       IF (unit_nr > 0) WRITE(unit_nr, "(A15,I12,A6,"//dformat//",A7,"//dformat//")") &
