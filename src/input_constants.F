@@ -1001,7 +1001,8 @@ MODULE input_constants
                                                sbe_propagator_rk4 = 4
 
    INTEGER, PARAMETER, PUBLIC               :: sbe_kpoints_mpack = 1, &
-                                               sbe_kpoints_kset = 2
+                                               sbe_kpoints_kset = 2, &
+                                               sbe_kpoints_kset_mpack = 3 ! binary OR
 
    INTEGER, PARAMETER, PUBLIC               :: kpoint_units_bvec = 1, &
                                                kpoint_units_angstrom = 2, &

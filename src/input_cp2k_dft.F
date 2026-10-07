@@ -55,7 +55,7 @@ MODULE input_cp2k_dft
         sic_mauri_us, sic_none, slater, use_mom_ref_coac, use_mom_ref_com, use_mom_ref_user, &
         use_mom_ref_zero, use_restart_wfn, use_rt_restart, use_scf_wfn, weight_type_mass, &
         weight_type_unit, &
-        sbe_kpoints_mpack, sbe_kpoints_kset, kpoint_units_bvec, kpoint_units_angstrom, &
+        sbe_kpoints_mpack, sbe_kpoints_kset, sbe_kpoints_kset_mpack, kpoint_units_bvec, kpoint_units_angstrom, &
         kpoint_units_bohr
    USE input_cp2k_almo,                 ONLY: create_almo_scf_section
    USE input_cp2k_as,                   ONLY: create_active_space_section
@@ -2432,12 +2432,15 @@ CONTAINS
       ! Scheme for KPOINTS
       CALL keyword_create(keyword, __LOCATION__, name="SCHEME", &
          description="Which scheme is used to create the set of KPOINTS.", &
-         enum_i_vals=[sbe_kpoints_mpack, sbe_kpoints_kset], &
+         enum_i_vals=[sbe_kpoints_mpack, sbe_kpoints_kset, sbe_kpoints_kset_mpack], &
          default_i_val=sbe_kpoints_mpack, &
-         enum_c_vals=s2a("MONKHORST-PACK", "KPOINT_SET"), &
+         enum_c_vals=s2a("MONKHORST-PACK", "KPOINT_SET", "SET+MP"), &
          enum_desc=s2a("Regular Monkhorst-Pack grid, dimensions specified "// &
-         "in the &KPOINTS section.", "Specific path through the Brillouin zone, "// &
-         "defined in the &KPOINT_SET subsection.") &
+         "in the &KPOINTS section.", &
+         "Specific path through the Brillouin zone, "// &
+         "defined in the &KPOINT_SET subsection.", &
+         "Both KPOINT_SET and MONKHORST-PACK (MP) schemes are used -- MP is "// &
+         "used for integrated observables, KPOINT_SET is used for k-resolved ones.") &
       )
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)

@@ -43,6 +43,7 @@ MODULE sbe
    USE sbe_types,                      ONLY: sbe_env_type, &
                                              init_sbe_env, &
                                              release_sbe_env, &
+                                             ikp_in_dist, &
                                              get_moments_rs_dbcsr
    USE sbe_methods,                    ONLY: init_densmat, &
                                              nonherm_metric, &
@@ -310,7 +311,11 @@ CONTAINS
                CALL propagate_density(sbe_env, sbe_env%densmat(j,:,:,i_local), &
                                       sbe_env%densmat_next(j,:,:,i_local), j, i, info)
             END DO
-            ! Occupations calculated at the _next time point
+
+            ! Observables done at next kpoint
+
+            ! Export k-resolved observables
+            ! TODO : Only do when needed
             DO j=1, sbe_env%n_spin
                ! Determine the k-resolved occupations and save them
                CALL gemm_square(sbe_env%eigvectors(j,:,:), "C", sbe_env%overlap_kp, "N", &
@@ -322,16 +327,24 @@ CONTAINS
                CALL gemm_square(sbe_env%densmat_work(1,:,:), "N", sbe_env%eigvectors(j,:,:), "N", &
                   sbe_env%densmat_work(2,:,:))
                ! TODO : Different number of bands?
-               DO k=1, sbe_env%n_ao
-                  sbe_env%band_occupations(j, k, i_local) = sbe_env%densmat_work(2,k,k)
-               END DO
+               IF (ikp_in_dist(sbe_env%kset_dist, i, sbe_env%mepos)) THEN
+                  ! TODO : Avoid explicit pointer arithmetic in distributions, export to functions over distributions
+                  i_local = i - sbe_env%kset_dist(1, sbe_env%mepos) + 1
+                  DO k=1, sbe_env%n_ao
+                     sbe_env%band_occupations(j, k, i_local) = sbe_env%densmat_work(2,k,k)
+                  END DO
+               END IF
             END DO
-            ! Export observables
-            ! Per-kpoint operations - add occ_numbers
-            CALL add_occ_numbers_kp(sbe_env, sbe_env%occ_numbers, sbe_env%densmat_next(:,:,:,i_local), i)
-            ! TODO : add current
-            ! TODO : Spin
-            ! CALL add_current_kp(sbe_env, sbe_env%densmat(1,:,:,i_local), sbe_env%kpoints%xkp(:,i), 1, total_current(:), i)
+
+            ! Export integrated observables
+            IF (ikp_in_dist(sbe_env%integrand_dist, i, sbe_env%mepos)) THEN
+               ! TODO : Avoid explicit pointer arithmetic in distributions, export to functions over distributions
+               i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
+               CALL add_occ_numbers_kp(sbe_env, sbe_env%occ_numbers, sbe_env%densmat_next(:,:,:,i_local), i)
+               ! TODO : add current
+               ! TODO : Spin
+               ! CALL add_current_kp(sbe_env, sbe_env%densmat(1,:,:,i_local), sbe_env%kpoints%xkp(:,i), 1, total_current(:), i)
+            END IF
          END DO
          ! Info can report e.g. self-consistency failures
          IF (info > 0) THEN
@@ -341,7 +354,9 @@ CONTAINS
          ! Sum over the occupation numbers across all ranks
          ! TODO : Could be redone via gather, might be faster. Also check when necessary?
          !        (definitely when printing occupations or run_info)
-         CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
+         IF (sbe_env%integrand_nkp > 0) THEN
+            CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
+         END IF
 
          ! Increment iterations
          CALL cp_iterate(logger%iter_info, iter_nr=i_step, last=(i_step == sbe_env%sim_nsteps))
@@ -358,10 +373,11 @@ CONTAINS
          !    REAL(total_current(1)), REAL(total_current(2)), REAL(total_current(3))
 
          ! Output occupations/vacancies into files
+         ! Only output when there is some data, i.e. there is some integrand distribution
          CALL output_occupation_file(sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%occ_section, &
-            header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.FALSE.)
+            sbe_env%integrand_dist, header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.FALSE.)
          CALL output_occupation_file(sbe_env%occ_numbers(1,:), sbe_env%sim_time, sbe_env%occ_section, &
-            header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.TRUE.)
+            sbe_env%integrand_dist, header_opt = (i_step == sbe_env%sim_start_orig), vacancy_opt=.TRUE.)
 
          ! k-resolved
          CALL output_occupations_kp_file(sbe_env, sbe_env%band_occupations, sbe_env%gathered_occupations, &

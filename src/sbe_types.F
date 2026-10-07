@@ -44,7 +44,8 @@ MODULE sbe_types
    USE input_constants, ONLY: sbe_propagator_rk4, &
                               sbe_propagator_euler, &
                               sbe_kpoints_mpack, &
-                              sbe_kpoints_kset
+                              sbe_kpoints_kset, &
+                              sbe_kpoints_kset_mpack
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -60,7 +61,11 @@ MODULE sbe_types
    TYPE sbe_env_type
       TYPE(kpoint_type), POINTER                         :: kpoints => NULL()
       INTEGER                                            :: local_nkp = 1, &
-                                                            mepos = 0
+                                                            mepos = 0, &
+                                                            integrand_nkp, &
+                                                            kset_nkp
+      INTEGER, DIMENSION(:,:), ALLOCATABLE               :: integrand_dist, & ! distribution of integrable kpoints
+                                                            kset_dist ! distribution of k-resolved kpoints
       TYPE(dft_control_type), POINTER                    :: dft_control => NULL()
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                    :: sab_all => NULL()
@@ -121,7 +126,8 @@ MODULE sbe_types
    PUBLIC :: sbe_env_type, &
              init_sbe_env, &
              release_sbe_env, &
-             get_moments_rs_dbcsr
+             get_moments_rs_dbcsr, &
+             ikp_in_dist
 CONTAINS
 ! **************************************************************************************************
 !> \brief Initializes the sbe_env - allocates objects and retrieves parameters from DFT
@@ -154,6 +160,10 @@ CONTAINS
       LOGICAL                                            :: do_hfx
       INTEGER, DIMENSION(:), POINTER                     :: mpack_dim
       TYPE(kpoint_set_type), DIMENSION(:), ALLOCATABLE   :: kp_sets
+      REAL(kind=dp), DIMENSION(:,:), POINTER             :: mpack_xkp, &
+                                                            kset_xkp
+      REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: mpack_wkp, &
+                                                            kset_wkp
 
       CALL timeset(routineN, handle)
 
@@ -187,63 +197,135 @@ CONTAINS
       ! Save cell - need for k-gradient construction during propagation
       sbe_env%hmat = cell%hmat
 
+      ! Initialize kpoints
       CALL kpoint_create(sbe_env%kpoints)
+      ! Populate the rs_to_kp required data
       CALL kpoint_init_cell_index(sbe_env%kpoints, sbe_env%sab_all, para_env, sbe_env%n_images)
+      ! Register para_env with kpoint
       sbe_env%kpoints%para_env => para_env
       CALL para_env%retain()
 
       ! Start by getting the info into kpoints
-      ! TODO : More sophisticated options
       NULLIFY (mpack_dim)
       kp_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%KPOINTS")
       CALL section_vals_val_get(kp_section, "SCHEME", i_val=kp_scheme_i)
+      ! The scheme uses binary flag system
+      !  - mpack has number 1( = 2^0)
+      !  - kset has number 2( = 2^1)
+      ! Whether a given set is used is determined by IAND(flag, feature) == feature
+      !  - e.g. flag 3 implies both kset and mpack
       SELECT CASE (kp_scheme_i)
          CASE (sbe_kpoints_mpack)
             sbe_env%kpoints%kp_scheme = "MONKHORST-PACK"
-            ! Immediately read the dimensions
-            CALL section_vals_val_get(kp_section, "GRID", i_vals=mpack_dim)
-            sbe_env%kpoints%nkp_grid(:) = mpack_dim(:)
-            sbe_env%kpoints%nkp = PRODUCT(mpack_dim)
-            ! Calculate the MONKHORT-PACK grid
-            ALLOCATE (sbe_env%kpoints%xkp(3,sbe_env%kpoints%nkp), source=0.0_dp)
-            CALL compute_xkp(sbe_env%kpoints%xkp, 1, sbe_env%kpoints%nkp, &
-               sbe_env%kpoints%nkp_grid)
          CASE (sbe_kpoints_kset)
             ! For compatibility, use GENERAL
             ! TODO : Maybe do integers here as well?
             sbe_env%kpoints%kp_scheme = "GENERAL"
-            CALL read_kpoint_set(section_vals_get_subs_vals(kp_section, "KPOINT_SET"), &
-               kp_sets, sbe_env%hmat)
-            ! TODO : Transform to kpoints env
-            sbe_env%kpoints%nkp = 0 
-            DO i=1, SIZE(kp_sets, 1)
-               sbe_env%kpoints%nkp = sbe_env%kpoints%nkp + &
-                  kp_sets(i)%n_segments * kp_sets(i)%nkp
-            END DO
-            ALLOCATE (sbe_env%kpoints%xkp(3,sbe_env%kpoints%nkp), source=0.0_dp)
-            ! Copy + union the segments
-            DO i=1, SIZE(kp_sets, 1)
-               DO j=1, kp_sets(i)%n_segments
-                  DO k=1, kp_sets(i)%nkp
-                     sbe_env%kpoints%xkp(:,kp_sets(i)%nkp*(j-1) + k) = &
-                        kp_sets(i)%xkp(:, k, j)
-                  END DO
+         CASE (sbe_kpoints_kset_mpack)
+            ! Do both general and mpack kpoints -- grid kpoints are always before set kpoints
+            ! TODO : Refactor so that the union is created without code doubling.
+            ! TODO : Refactor distribution, so that it acts on the kset and mpack parts separately
+            sbe_env%kpoints%kp_scheme = "MPACK+SET"
+         CASE DEFAULT
+            CPABORT("Unknown kpoint set scheme")
+      END SELECT
+
+      ! From now on, the kpoint scheme is verified correct
+      ! Depending on whether set is requested or not, allocate xkp and wkp
+
+      ! Monkhorst-Pack grid
+      IF (IAND(kp_scheme_i, sbe_kpoints_mpack) == sbe_kpoints_mpack) THEN
+         ! Read the dimensions
+         CALL section_vals_val_get(kp_section, "GRID", i_vals=mpack_dim)
+
+         ! Can set this up, but this is not necessarily relevant
+         sbe_env%kpoints%nkp_grid(:) = mpack_dim(:)
+
+         ! Actual xkp+wkp calculation
+         sbe_env%integrand_nkp = PRODUCT(mpack_dim)
+         NULLIFY (mpack_xkp)
+         ALLOCATE (mpack_xkp(3,sbe_env%integrand_nkp), source=0.0_dp)
+         CALL compute_xkp(mpack_xkp, 1, SIZE(mpack_xkp, 2), mpack_dim)
+         ALLOCATE (mpack_wkp(SIZE(mpack_xkp, 2)))
+         mpack_wkp(:) = 1.0_dp/REAL(SIZE(mpack_xkp, 2), kind=dp)
+      ELSE
+         ! Empty grid
+         sbe_env%kpoints%nkp_grid(:) = 0
+         sbe_env%integrand_nkp = 0
+         NULLIFY (mpack_xkp)
+         ALLOCATE (mpack_xkp(3,0))
+         ALLOCATE (mpack_wkp(0))
+      END IF
+
+      ! Kset
+      IF (IAND(kp_scheme_i, sbe_kpoints_kset) == sbe_kpoints_kset) THEN
+         ! Get the definitions
+         CALL read_kpoint_set(section_vals_get_subs_vals(kp_section, "KPOINT_SET"), &
+            kp_sets, sbe_env%hmat)
+         sbe_env%kset_nkp = 0
+         DO i=1, SIZE(kp_sets, 1)
+            sbe_env%kset_nkp = sbe_env%kset_nkp + &
+               kp_sets(i)%n_segments * kp_sets(i)%nkp
+         END DO
+         NULLIFY (kset_xkp)
+         ALLOCATE (kset_xkp(3,sbe_env%kset_nkp), source=0.0_dp)
+         ! By default, no integration, so no kpoint weight
+         ALLOCATE (kset_wkp(sbe_env%kset_nkp), source=0.0_dp)
+         ! Copy + union the segments
+         DO i=1, SIZE(kp_sets, 1)
+            DO j=1, kp_sets(i)%n_segments
+               DO k=1, kp_sets(i)%nkp
+                  kset_xkp(:,kp_sets(i)%nkp*(j-1) + k) = &
+                     kp_sets(i)%xkp(:, k, j)
                END DO
             END DO
-            CALL kpoint_set_release(kp_sets)
-         CASE DEFAULT
-            CPABORT("The KPOINT scheme is not implemented for SBEs.")
-      END SELECT
-      ! Equal kpoint weights
-      ! TODO : How to do kpoint weights in KPOINT_SET scheme
-      ! TODO : Is it even meaningful to have BZ integration only along a chosen line?
-      ALLOCATE (sbe_env%kpoints%wkp(sbe_env%kpoints%nkp))
-      sbe_env%kpoints%wkp(:) = 1.0_dp/REAL(sbe_env%kpoints%nkp, kind=dp)
-      ! Get the kpoint distribution
-      CALL sbe_create_kpoint_dist(sbe_env%kpoints, efficiency)
+         END DO
+         CALL kpoint_set_release(kp_sets)
+      ELSE
+         ! Empty kset
+         sbe_env%kset_nkp = 0
+         NULLIFY (kset_xkp)
+         ALLOCATE (kset_xkp(3,0))
+         ALLOCATE (kset_wkp(0))
+      END IF
+
+      ! Calculate the distribution
+      CALL sbe_create_kpoint_dist_new(sbe_env%kpoints, sbe_env%integrand_dist, sbe_env%kset_dist, & ! Outputs
+                                      mpack_xkp, kset_xkp, mpack_wkp, kset_wkp, & ! Inputs
+                                      efficiency) ! Efficiency report
+
+      DEALLOCATE (kset_xkp)
+      DEALLOCATE (kset_wkp)
+      DEALLOCATE (mpack_xkp)
+      DEALLOCATE (mpack_wkp)
+
+      ! mepos saved in 1-indexing
       sbe_env%mepos = sbe_env%kpoints%para_env%mepos + 1
+
+      ! local kpoints serviced are based on the overall kp_dist
       sbe_env%local_nkp = sbe_env%kpoints%kp_dist(2, sbe_env%mepos) - &
                           sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
+
+      ! Allocate space for k-resolved occupations
+      ! Need to get n_ao and n_spin already here
+      CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, matrix_ks_kp=matrix_ks_kp)
+      CALL dbcsr_get_info(matrix_s_kp(1,1)%matrix, nfullrows_total=sbe_env%n_ao)
+      sbe_env%n_spin = SIZE(matrix_ks_kp, 1)
+
+      ! Need local occupation storage on all ranks
+      ! TODO : Might need to do some memory tricks for unequal kpoint distribution
+      ALLOCATE (sbe_env%band_occupations(sbe_env%n_spin, sbe_env%n_ao, &
+         sbe_env%kset_dist(2,sbe_env%mepos) - sbe_env%kset_dist(1,sbe_env%mepos) + 1), & ! Local kpoints
+         source=CMPLX(0.0, 0.0, kind=dp))
+      IF (sbe_env%unit_nr > 0) THEN
+         ! On source, need large gather storage
+         ALLOCATE (sbe_env%gathered_occupations(sbe_env%n_spin, sbe_env%n_ao, sbe_env%kset_nkp), &
+            source=CMPLX(0.0, 0.0, kind=dp))
+      ELSE
+         ! Allocate empty gather storage, needed for functional gather
+         ALLOCATE (sbe_env%gathered_occupations(0,0,0))
+      END IF
+
       logger => cp_get_default_logger()
       sbe_env%unit_nr = cp_logger_get_default_io_unit(logger)
       ! Print info about kpoint distribution efficiency
@@ -253,6 +335,17 @@ CONTAINS
             WRITE (sbe_env%unit_nr, "(A11,I4,A13,I38,I4,A6,I4)") " SBE| Task ", i-1, &
                " kpoint range", sbe_env%kpoints%kp_dist(1,i), &
                sbe_env%kpoints%kp_dist(2,i), " total", sbe_env%local_nkp
+            ! If dual grids are used, report grid contributions per rank
+            IF (kp_scheme_i == sbe_kpoints_kset_mpack) THEN
+               WRITE (sbe_env%unit_nr, "(A11,I4,A10,I41,I4,A6,I4)") " SBE| Task ", i-1, &
+                  " grid part", sbe_env%integrand_dist(1,i), &
+                  sbe_env%integrand_dist(2,i), " total", &
+                  sbe_env%integrand_dist(2,i) - sbe_env%integrand_dist(1,i) + 1
+               WRITE (sbe_env%unit_nr, "(A11,I4,A10,I41,I4,A6,I4)") " SBE| Task ", i-1, &
+                  " kset part", sbe_env%kset_dist(1,i), &
+                  sbe_env%kset_dist(2,i), " total", &
+                  sbe_env%kset_dist(2,i) - sbe_env%kset_dist(1,i) + 1
+            END IF
          END DO
       END IF
       ! Print out info about kpoints themselves
@@ -265,26 +358,10 @@ CONTAINS
       END IF
 
       ! Continue with allocation of rs-matrices (these are defined on full, non-symmetric grid)
-      CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, matrix_ks_kp=matrix_ks_kp)
-      CALL dbcsr_get_info(matrix_s_kp(1,1)%matrix, nfullrows_total=sbe_env%n_ao)
-      sbe_env%n_spin = SIZE(matrix_ks_kp, 1)
       ALLOCATE (sbe_env%overlap_rs(1, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
       ALLOCATE (sbe_env%ham_zero_rs(sbe_env%n_spin, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
       ALLOCATE (sbe_env%moments_rs(3, sbe_env%n_ao, sbe_env%n_ao, sbe_env%n_images), source=0.0_dp)
 
-      ! Allocate space for k-resolved occupations
-      ! Need local occupation storage on all ranks
-      ! TODO : Might need to do some memory tricks for unequal kpoint distribution
-      ALLOCATE (sbe_env%band_occupations(sbe_env%n_spin, sbe_env%n_ao, sbe_env%local_nkp), &
-         source=CMPLX(0.0, 0.0, kind=dp))
-      IF (sbe_env%unit_nr > 0) THEN
-         ! On source, need large gather storage
-         ALLOCATE (sbe_env%gathered_occupations(sbe_env%n_spin, sbe_env%n_ao, sbe_env%kpoints%nkp), &
-            source=CMPLX(0.0, 0.0, kind=dp))
-      ELSE
-         ! Allocate empty gather storage, needed for functional gather
-         ALLOCATE (sbe_env%gathered_occupations(0,0,0))
-      END IF
       ! Allocate k-matrices
       ALLOCATE (sbe_env%overlap_kp(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (sbe_env%inv_overlap_kp(sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
@@ -389,6 +466,8 @@ CONTAINS
 
       CPASSERT(ASSOCIATED(sbe_env))
 
+      DEALLOCATE (sbe_env%kset_dist)
+      DEALLOCATE (sbe_env%integrand_dist)
       CALL kpoint_release(sbe_env%kpoints)
 
       DEALLOCATE (sbe_env%overlap_rs)
@@ -430,60 +509,142 @@ CONTAINS
    END SUBROUTINE release_sbe_env
 ! **************************************************************************************************
 !> \brief Calculates the kpoint distribution - tries put equal number of kpoints on each MPI rank
-!> \param kpoints kpoint_type structure, containing nkp and destination for the distribution
+!> \param kpoints kpoint_type structure, populated here
+!> \param mpack_dist piece-wise contiguous distribution of grid kpoints, allocated here
+!> \param kset_dist piece-wise contiguous distribution of kset kpoints, allocated here
+!> \param mpack_xkp Coordinates of kpoints on the grid
+!> \param kset_xkp Coordinates of kpoints in the set
+!> \param mpack_wkp Weights of kpoints on the grid
+!> \param kset_wkp Weights of kpoints in the set
 !> \param efficiency_opt reports optional efficiency (actual work/(num_pe * max_work_per_pe))
 !> \author Stepan Marek
-!> \date 11.2025
+!> \date 10.2026
 ! **************************************************************************************************
-   SUBROUTINE sbe_create_kpoint_dist(kpoints, efficiency_opt)
-      TYPE(kpoint_type), POINTER                         :: kpoints
-      REAL(kind=dp), OPTIONAL                            :: efficiency_opt
-      INTEGER                                            :: num_pe, &
-                                                            i, &
-                                                            !mepos, &
-                                                            per_task
-      INTEGER, DIMENSION(:), ALLOCATABLE                 :: nkp_loc
+   SUBROUTINE sbe_create_kpoint_dist(kpoints, mpack_dist, kset_dist, &
+         mpack_xkp, kset_xkp, mpack_wkp, kset_wkp, efficiency_opt)
+      TYPE(kpoint_type), POINTER, INTENT(INOUT)          :: kpoints
+      INTEGER, DIMENSION(:,:), ALLOCATABLE, INTENT(OUT)  :: mpack_dist, &
+                                                            kset_dist
+      REAL(kind=dp), DIMENSION(:,:), INTENT(IN)          :: mpack_xkp, &
+                                                            kset_xkp
+      REAL(kind=dp), DIMENSION(:), INTENT(IN)            :: mpack_wkp, &
+                                                            kset_wkp
+      REAL(kind=dp), INTENT(OUT), OPTIONAL               :: efficiency_opt
+      INTEGER                                            :: mpack_nkp, &
+                                                            kset_nkp, &
+                                                            num_pe, &
+                                                            mpack_per_rank, &
+                                                            kset_per_rank, &
+                                                            mpack_remainder, &
+                                                            kset_remainder, &
+                                                            i, rank_size, prev_end, &
+                                                            mpack_rank_size, &
+                                                            kset_rank_size, &
+                                                            current_rank, &
+                                                            mpack_i, kset_i
 
-      ! Get the number of tasks
+      ! Get dimensions
       num_pe = kpoints%para_env%num_pe
-      ! Allocate the distribution
+      mpack_nkp = SIZE(mpack_xkp, 2)
+      kset_nkp = SIZE(kset_xkp, 2)
+
+      ! Mpack minimal per rank
+      mpack_per_rank = mpack_nkp / num_pe
+      mpack_remainder = MODULO(mpack_nkp, num_pe)
+      ! Kset minimal per rank
+      kset_per_rank = kset_nkp / num_pe
+      kset_remainder = MODULO(kset_nkp, num_pe)
+
+      ! Set already known parameters for kpoints
+      kpoints%nkp = mpack_nkp + kset_nkp
+      ! By default, no kpoints at each rank -- this corresponds to the following limits
       ALLOCATE (kpoints%kp_dist(2, num_pe), source=-1)
-      per_task = kpoints%nkp / num_pe
-      ALLOCATE (nkp_loc(num_pe), source=per_task)
-      DO i=1, MODULO(kpoints%nkp, num_pe)
-         nkp_loc(i) = per_task + 1
+      kpoints%kp_dist(1,:) = -2
+      ALLOCATE (mpack_dist(2, num_pe), source=-1)
+      mpack_dist(1,:) = -2
+      ALLOCATE (kset_dist(2, num_pe), source=-1)
+      kset_dist(1,:) = -2
+
+      prev_end = 0
+      DO i=1, num_pe
+         ! Determine the size for current rank
+         ! Start with mpack contribution
+         mpack_rank_size = mpack_per_rank
+         IF (i <= mpack_remainder) mpack_rank_size = mpack_rank_size + 1
+         IF (mpack_rank_size > 0) THEN
+            mpack_dist(1,i) = prev_end + 1
+            mpack_dist(2,i) = prev_end + mpack_rank_size
+         END IF
+
+         ! Continue with kset contribution
+         kset_rank_size = kset_per_rank
+         IF (i <= kset_remainder) kset_rank_size = kset_rank_size + 1
+         IF (kset_rank_size > 0) THEN
+            kset_dist(1,i) = prev_end + mpack_rank_size + 1
+            kset_dist(2,i) = prev_end + mpack_rank_size + kset_rank_size
+         END IF
+         rank_size = mpack_rank_size + kset_rank_size
+         ! Only update the default distribution if non-zero rank size
+         IF (rank_size > 0) THEN
+            ! Start is based on previous end
+            kpoints%kp_dist(1,i) = prev_end + 1
+            ! Update prev_end to current end
+            prev_end = prev_end + rank_size
+            ! Write current end
+            kpoints%kp_dist(2,i) = prev_end
+         END IF
       END DO
-      IF (kpoints%nkp < 1) THEN
-         ! Edge case - invalid or zero number of kpoints
-         ! In that case, set up so that all bounds lead to no iterations
-         kpoints%kp_dist(1,:) = -1
-         kpoints%kp_dist(2,:) = -2
-      ELSE
-         ! Standard case
-         ! Start
-         kpoints%kp_dist(1,1) = 1
-         kpoints%kp_dist(2,1) = nkp_loc(1)
-         ! Other tasks
-         DO i=2, num_pe
-            IF (nkp_loc(i) > 0) THEN
-               kpoints%kp_dist(1,i) = kpoints%kp_dist(2,i-1) + 1
-               kpoints%kp_dist(2,i) = kpoints%kp_dist(1,i) + nkp_loc(i) - 1
-            ELSE
-               ! No kpoints edge case - no iteration setup
-               kpoints%kp_dist(1,i) = -1
-               kpoints%kp_dist(2,i) = -2
-            END IF
-         END DO
-      END IF
-      ! The distribution is now setup
-      ! If requested, report on efficiency of work balance distribution
+
+      ! TODO : validate that xkp and wkp are populated from provided ones, couple to initialisation
+      ALLOCATE (kpoints%xkp(3, mpack_nkp + kset_nkp), source=0.0_dp)
+      ALLOCATE (kpoints%wkp(mpack_nkp + kset_nkp), source=0.0_dp)
+      ! Iterate over all global kpoint indices
+      current_rank = 1
+      mpack_i = 1
+      kset_i = 1
+      DO i=1, kpoints%kp_dist(2, num_pe)
+         ! If we are outside of current rank, increment
+         IF (i > kpoints%kp_dist(2, current_rank)) THEN
+            current_rank = current_rank + 1
+         END IF
+         CPASSERT(current_rank <= num_pe)
+         ! Determine whether this is mpack or kset part
+         IF (ikp_in_dist(mpack_dist, i, current_rank)) THEN
+            kpoints%xkp(:,i) = mpack_xkp(:,mpack_i)
+            kpoints%wkp(i) = mpack_wkp(mpack_i)
+            mpack_i = mpack_i + 1
+         ELSE IF (ikp_in_dist(kset_dist, i, current_rank)) THEN
+            kpoints%xkp(:,i) = kset_xkp(:,kset_i)
+            kpoints%wkp(i) = kset_wkp(kset_i)
+            kset_i = kset_i + 1
+         END IF
+      END DO
+
+      ! If required, calculate the efficiency
       IF (PRESENT(efficiency_opt)) THEN
-         efficiency_opt = REAL(kpoints%nkp, kind=dp) / ( &
-            REAL(num_pe, kind=dp) * REAL(nkp_loc(1), kind=dp))
+         efficiency_opt = REAL(kpoints%nkp, kind=dp) / ( & ! Total work
+            REAL(num_pe, kind=dp) * & ! Number of ranks
+            REAL(kpoints%kp_dist(2,1) - kpoints%kp_dist(1,1) + 1, kind=dp) & ! Largest work per rank
+            )
       END IF
-      ! TODO : Put io task on the rank which has fewer kpoints, if such task exists
-      DEALLOCATE (nkp_loc)
    END SUBROUTINE sbe_create_kpoint_dist
+! **************************************************************************************************
+!> \brief Determines whether given index is part of the distribution for given position
+!> \note Useful for multiple kpoint distributions
+!> \param dist Distribution of indices among ranks
+!> \param ikp Queried index
+!> \param pos Rank position
+!> \author Stepan Marek
+!> \date 10.2026
+! **************************************************************************************************
+   FUNCTION ikp_in_dist(dist, ikp, pos) RESULT (res)
+      INTEGER, DIMENSION(:,:), INTENT(IN)                :: dist
+      INTEGER, INTENT(IN)                                :: ikp, &
+                                                            pos
+      LOGICAL                                            :: res
+
+      res = (ikp >= dist(1,pos)) .AND. (ikp <= dist(2,pos))
+   END FUNCTION ikp_in_dist
 ! **************************************************************************************************
 !> \brief Calculates the AO atomic moments for images present in qs_env
 !> \note Moment reference point is taken from REAL_TIME_PROPAGATION%PRINT%MOMENTS
