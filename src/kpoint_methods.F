@@ -2663,8 +2663,9 @@ CONTAINS
             nkp = 1
          END IF
          kp_sets(iset)%n_segments = n_seg
-         ! Now have all the information to allocate current segment
-         ALLOCATE (kp_sets(iset)%xkp(3,nkp,n_seg))
+         ! Now have all the information to allocate segments
+         ! NOTE : the start and end points of consecutive segments are identical
+         ALLOCATE (kp_sets(iset)%xkp(3,nkp+1,n_seg))
          IF (nkp > 1) THEN
             ! Iterate through segments
             DO iseg=1, n_seg
@@ -2673,7 +2674,7 @@ CONTAINS
                   i_rep_val=iseg, r_vals=start_point)
                CALL section_vals_val_get(set_section, "SPECIAL_POINT", i_rep_section=iset, &
                   i_rep_val=iseg+1, r_vals=end_point)
-               dk(1:3) = (end_point(1:3) - start_point(1:3)) / REAL(nkp - 1, kind=dp)
+               dk(1:3) = (end_point(1:3) - start_point(1:3)) / REAL(nkp, kind=dp)
                ! Multiply by unit matrices, if required
                SELECT CASE (k_unit)
                   CASE (kpoint_units_bvec)
@@ -2690,8 +2691,8 @@ CONTAINS
                      CPABORT("Unknown units in KPOINT_SET")
                END SELECT
                kp_sets(iset)%xkp(1:3,1,iseg) = start_point(1:3)
-               DO ikp=2,nkp
-                  kp_sets(iset)%xkp(1:3,ikp,iseg) = start_point(1:3) + REAL(ikp-1, kind=dp) * dk(1:3)
+               DO ikp=1,nkp
+                  kp_sets(iset)%xkp(1:3,ikp+1,iseg) = start_point(1:3) + REAL(ikp, kind=dp) * dk(1:3)
                END DO
             END DO
          ELSE

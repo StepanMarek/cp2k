@@ -143,7 +143,8 @@ CONTAINS
       INTEGER                                            :: handle, &
                                                             i, j, k, &
                                                             info, &
-                                                            kp_scheme_i
+                                                            kp_scheme_i, &
+                                                            kset_local
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mp_para_env_type), POINTER                    :: para_env
@@ -265,7 +266,7 @@ CONTAINS
          sbe_env%kset_nkp = 0
          DO i=1, SIZE(kp_sets, 1)
             sbe_env%kset_nkp = sbe_env%kset_nkp + &
-               kp_sets(i)%n_segments * kp_sets(i)%nkp
+               kp_sets(i)%n_segments * kp_sets(i)%nkp + 1
          END DO
          NULLIFY (kset_xkp)
          ALLOCATE (kset_xkp(3,sbe_env%kset_nkp), source=0.0_dp)
@@ -273,8 +274,11 @@ CONTAINS
          ALLOCATE (kset_wkp(sbe_env%kset_nkp), source=0.0_dp)
          ! Copy + union the segments
          DO i=1, SIZE(kp_sets, 1)
+            ! TODO : Set offsets
             DO j=1, kp_sets(i)%n_segments
-               DO k=1, kp_sets(i)%nkp
+               IF (j==1) kset_xkp(:,1) = kp_sets(i)%xkp(:, 1, 1)
+               ! For all segments, we iterate up to last, which is nkp+1
+               DO k=2, kp_sets(i)%nkp+1
                   kset_xkp(:,kp_sets(i)%nkp*(j-1) + k) = &
                      kp_sets(i)%xkp(:, k, j)
                END DO
@@ -290,7 +294,7 @@ CONTAINS
       END IF
 
       ! Calculate the distribution
-      CALL sbe_create_kpoint_dist_new(sbe_env%kpoints, sbe_env%integrand_dist, sbe_env%kset_dist, & ! Outputs
+      CALL sbe_create_kpoint_dist(sbe_env%kpoints, sbe_env%integrand_dist, sbe_env%kset_dist, & ! Outputs
                                       mpack_xkp, kset_xkp, mpack_wkp, kset_wkp, & ! Inputs
                                       efficiency) ! Efficiency report
 
@@ -314,12 +318,13 @@ CONTAINS
 
       ! Need local occupation storage on all ranks
       ! TODO : Might need to do some memory tricks for unequal kpoint distribution
-      ALLOCATE (sbe_env%band_occupations(sbe_env%n_spin, sbe_env%n_ao, &
-         sbe_env%kset_dist(2,sbe_env%mepos) - sbe_env%kset_dist(1,sbe_env%mepos) + 1), & ! Local kpoints
+      kset_local = sbe_env%kset_dist(2,sbe_env%mepos) - sbe_env%kset_dist(1,sbe_env%mepos) + 1
+      ALLOCATE (sbe_env%band_occupations(sbe_env%n_spin, sbe_env%n_ao, kset_local), & ! Local kpoints
          source=CMPLX(0.0, 0.0, kind=dp))
       IF (sbe_env%unit_nr > 0) THEN
          ! On source, need large gather storage
-         ALLOCATE (sbe_env%gathered_occupations(sbe_env%n_spin, sbe_env%n_ao, sbe_env%kset_nkp), &
+         CALL sbe_env%kpoints%para_env%max(kset_local)
+         ALLOCATE (sbe_env%gathered_occupations(sbe_env%n_spin, sbe_env%n_ao, kset_local * sbe_env%kpoints%para_env%num_pe), &
             source=CMPLX(0.0, 0.0, kind=dp))
       ELSE
          ! Allocate empty gather storage, needed for functional gather
@@ -334,7 +339,8 @@ CONTAINS
          DO i=1, sbe_env%kpoints%para_env%num_pe
             WRITE (sbe_env%unit_nr, "(A11,I4,A13,I38,I4,A6,I4)") " SBE| Task ", i-1, &
                " kpoint range", sbe_env%kpoints%kp_dist(1,i), &
-               sbe_env%kpoints%kp_dist(2,i), " total", sbe_env%local_nkp
+               sbe_env%kpoints%kp_dist(2,i), " total", &
+               sbe_env%kpoints%kp_dist(2,i) - sbe_env%kpoints%kp_dist(1,i) + 1
             ! If dual grids are used, report grid contributions per rank
             IF (kp_scheme_i == sbe_kpoints_kset_mpack) THEN
                WRITE (sbe_env%unit_nr, "(A11,I4,A10,I41,I4,A6,I4)") " SBE| Task ", i-1, &
