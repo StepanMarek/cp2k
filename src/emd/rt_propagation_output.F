@@ -1783,6 +1783,7 @@ CONTAINS
       xscale = 1.0_dp
       IF (PRESENT(xscale_opt)) xscale = xscale_opt
 
+      ! TODO : FORTRAN arrays are contiguous along the first dimension... Maybe faster when done in reverse?
       ncols = SIZE(yvals, 1)
       nrows = SIZE(yvals, 2)
 

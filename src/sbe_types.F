@@ -319,12 +319,10 @@ CONTAINS
       ! Need local occupation storage on all ranks
       ! TODO : Might need to do some memory tricks for unequal kpoint distribution
       kset_local = sbe_env%kset_dist(2,sbe_env%mepos) - sbe_env%kset_dist(1,sbe_env%mepos) + 1
-      ALLOCATE (sbe_env%band_occupations(sbe_env%n_spin, sbe_env%n_ao, kset_local), & ! Local kpoints
+      ALLOCATE (sbe_env%band_occupations(kset_local, sbe_env%n_spin, sbe_env%n_ao), & ! Local kpoints
          source=CMPLX(0.0, 0.0, kind=dp))
       IF (sbe_env%unit_nr > 0) THEN
-         ! On source, need large gather storage
-         CALL sbe_env%kpoints%para_env%max(kset_local)
-         ALLOCATE (sbe_env%gathered_occupations(sbe_env%n_spin, sbe_env%n_ao, kset_local * sbe_env%kpoints%para_env%num_pe), &
+         ALLOCATE (sbe_env%gathered_occupations(sbe_env%kset_nkp, sbe_env%n_spin, sbe_env%n_ao), &
             source=CMPLX(0.0, 0.0, kind=dp))
       ELSE
          ! Allocate empty gather storage, needed for functional gather
@@ -564,12 +562,12 @@ CONTAINS
       ! Set already known parameters for kpoints
       kpoints%nkp = mpack_nkp + kset_nkp
       ! By default, no kpoints at each rank -- this corresponds to the following limits
-      ALLOCATE (kpoints%kp_dist(2, num_pe), source=-1)
-      kpoints%kp_dist(1,:) = -2
-      ALLOCATE (mpack_dist(2, num_pe), source=-1)
-      mpack_dist(1,:) = -2
-      ALLOCATE (kset_dist(2, num_pe), source=-1)
-      kset_dist(1,:) = -2
+      ALLOCATE (kpoints%kp_dist(2, num_pe), source=-2)
+      kpoints%kp_dist(1,:) = -1
+      ALLOCATE (mpack_dist(2, num_pe), source=-2)
+      mpack_dist(1,:) = -1
+      ALLOCATE (kset_dist(2, num_pe), source=-2)
+      kset_dist(1,:) = -1
 
       prev_end = 0
       DO i=1, num_pe
@@ -602,13 +600,13 @@ CONTAINS
       END DO
 
       ! TODO : validate that xkp and wkp are populated from provided ones, couple to initialisation
-      ALLOCATE (kpoints%xkp(3, mpack_nkp + kset_nkp), source=0.0_dp)
-      ALLOCATE (kpoints%wkp(mpack_nkp + kset_nkp), source=0.0_dp)
+      ALLOCATE (kpoints%xkp(3, kpoints%nkp), source=0.0_dp)
+      ALLOCATE (kpoints%wkp(kpoints%nkp), source=0.0_dp)
       ! Iterate over all global kpoint indices
       current_rank = 1
       mpack_i = 1
       kset_i = 1
-      DO i=1, kpoints%kp_dist(2, num_pe)
+      DO i=1, kpoints%nkp
          ! If we are outside of current rank, increment
          IF (i > kpoints%kp_dist(2, current_rank)) THEN
             current_rank = current_rank + 1

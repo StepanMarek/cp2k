@@ -376,5 +376,8 @@ registry["M_INIT_ENERGY"] = GenericMatcher(
 registry["M_CONS_QTY"] = GenericMatcher(r"MD| Conserved quantity", col=5)
 
 # SBE
-registry["SBE_H2_OCC"] = GenericMatcher(r"SBE_OCC\|\s+0.250+", col=5, regex=True)
+registry["SBE_H2_OCC"] = GenericMatcher(r"SBE_OCC\|\s+0\.250+", col=5, regex=True)
+registry["SBE_GRAPHENE_K_OCC"] = GenericMatcher(r"SBE_OCC_KP\|\s+0\.40+", regex=True, col=7)
+registry["SBE_GRAPHENE_K_VAC"] = GenericMatcher(r"SBE_OCC_KP\|\s+0\.40+", regex=True, col=6)
+registry["SBE_GRAPHENE_OCC"] = GenericMatcher(r"SBE_OCC\|\s+0\.20+", regex=True, col=11)
 # EOF

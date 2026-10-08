@@ -331,7 +331,7 @@ CONTAINS
                   ! TODO : Avoid explicit pointer arithmetic in distributions, export to functions over distributions
                   i_local = i - sbe_env%kset_dist(1, sbe_env%mepos) + 1
                   DO k=1, sbe_env%n_ao
-                     sbe_env%band_occupations(j, k, i_local) = sbe_env%densmat_work(2,k,k)
+                     sbe_env%band_occupations(i_local, j, k) = sbe_env%densmat_work(2,k,k)
                   END DO
                END IF
             END DO
