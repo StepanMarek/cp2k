@@ -1,1 +1,7 @@
 "h2.inp"                                = [{matcher="SBE_H2_OCC", tol=1e-3, ref=0.73936188E-011}]
+"graphene_kset.inp"			= [{matcher="SBE_GRAPHENE_K_OCC", tol=1e-5, ref=0.81465779E-002},
+					   {matcher="SBE_GRAPHENE_K_VAC", tol=1e-5, ref=0.99185342E+000}]
+"graphene_mpack.inp"			= [{matcher="SBE_GRAPHENE_OCC", tol=1e-3, ref=0.66689398E-010}]
+"graphene_dual.inp"			= [{matcher="SBE_GRAPHENE_K_OCC", tol=1e-5, ref=0.81465779E-002},
+					   {matcher="SBE_GRAPHENE_K_VAC", tol=1e-5, ref=0.99185342E+000},
+					   {matcher="SBE_GRAPHENE_OCC", tol=1e-3, ref=0.66689398E-010}]

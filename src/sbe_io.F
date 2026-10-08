@@ -27,6 +27,7 @@ MODULE sbe_io
                                     rt_file_comp_real
    USE sbe_methods, ONLY: nonherm_metric, &
                           nonidempot_metric
+   USE sbe_utils, ONLY: polymorphic_gather
    USE sbe_types, ONLY: sbe_env_type
    USE cp_files, ONLY: file_exists
    USE kpoint_k_r_trafo_simple, ONLY: rs_to_kp
@@ -280,11 +281,13 @@ CONTAINS
                                                             do_vacancies, &
                                                             do_prefix
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: xvals
+      COMPLEX(kind=dp), DIMENSION(:,:,:), ALLOCATABLE    :: yvals
+      INTEGER, DIMENSION(:), ALLOCATABLE                 :: kset_length_dist
 
       CALL timeset(routineN, handle)
 
       n_spin = sbe_env%n_spin
-      nkp = sbe_env%kpoints%nkp
+      nkp = sbe_env%kset_nkp
       n_ao = sbe_env%n_ao
       do_headers = .FALSE.
       IF (PRESENT(headers_opt)) do_headers = headers_opt
@@ -305,12 +308,20 @@ CONTAINS
          RETURN
       END IF
 
-      ! Do matrix gather for each spin channel
+      ! Determine the length distribution
+      ALLOCATE (kset_length_dist(SIZE(sbe_env%kset_dist, 2)), source=0)
+      DO ikp=1, SIZE(kset_length_dist, 1)
+         kset_length_dist(ikp) = sbe_env%kset_dist(2,ikp) - sbe_env%kset_dist(1,ikp) + 1
+      END DO
+
+      ! Carry out the gather
       DO ispin=1, n_spin
-         CALL sbe_env%kpoints%para_env%gather( &
-            local_occupations(ispin, :, :), &
-            gathered_occupations(ispin, :, :) &
-         )
+         DO iband=1, n_ao
+            CALL polymorphic_gather(local_occupations(:, ispin, iband), &
+               gathered_occupations(:, ispin, iband), &
+               sbe_env%kpoints%para_env, &
+               kset_length_dist)
+         END DO
       END DO
 
       ! Open the file
@@ -345,8 +356,14 @@ CONTAINS
       END IF
 
       ALLOCATE (xvals(nkp), source=REAL(0.0, kind=dp))
+      ALLOCATE (yvals(n_ao, nkp, n_spin), source=CMPLX(0.0, 0.0, kind=dp))
       DO ikp=1, nkp
          xvals(ikp) = REAL(ikp, kind=dp)
+         DO iband=1, n_ao
+            DO ispin=1, n_spin
+               yvals(iband, ikp, ispin) = gathered_occupations(ikp, ispin, iband)
+            END DO
+         END DO
       END DO
       ! Print the reshaped array
       ! DEBUG : spin
@@ -354,29 +371,31 @@ CONTAINS
       IF (do_headers) THEN
          IF (do_prefix) THEN
             CALL print_rt_file(occ_unit, xvals=xvals, &
-               yvals=gathered_occupations(ispin, :, :), &
+               yvals=yvals(:,:,ispin), &
                headers=headers, comp_opt=rt_file_comp_real, &
                prefix=prefix, prefix_format=prefix_format)
          ELSE
             CALL print_rt_file(occ_unit, xvals=xvals, &
-               yvals=gathered_occupations(ispin, :, :), &
+               yvals=yvals(:,:,ispin), &
                headers=headers, comp_opt=rt_file_comp_real)
          END IF
          DEALLOCATE (headers)
       ELSE
          IF (do_prefix) THEN
             CALL print_rt_file(occ_unit, xvals=xvals, &
-               yvals=gathered_occupations(ispin, :, :), &
+               yvals=yvals(:,:,ispin), &
                comp_opt=rt_file_comp_real, &
                prefix=prefix, prefix_format=prefix_format)
          ELSE
             CALL print_rt_file(occ_unit, xvals=xvals, &
-               yvals=gathered_occupations(ispin, :, :), &
+               yvals=yvals(:,:,ispin), &
                comp_opt=rt_file_comp_real)
          END IF
       END IF
 
       DEALLOCATE (xvals)
+      DEALLOCATE (yvals)
+      DEALLOCATE (kset_length_dist)
 
       CALL timestop(handle)
    END SUBROUTINE output_occupations_kp_file

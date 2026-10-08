@@ -224,6 +224,7 @@ CONTAINS
       DO ispin=1, sbe_env%n_spin
          sbe_env%densmat_work(1,:,:) = sbe_env%ham_zero_kp(ispin,:,:)
          sbe_env%densmat_work(2,:,:) = sbe_env%overlap_kp(:,:)
+         ! TODO : Use already present diagonalisation
          CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(1,:,:), &
                     sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
                     sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
