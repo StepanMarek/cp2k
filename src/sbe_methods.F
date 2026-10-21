@@ -163,7 +163,8 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                           :: routineN="get_damping_term"
       INTEGER                                               :: handle, &
                                                                info, &
-                                                               i
+                                                               i, j
+      REAL(kind=dp)                                         :: energy_exp
 
       CALL timeset(routineN, handle)
 
@@ -184,13 +185,17 @@ CONTAINS
                        sbe_env%eigvectors(ispin,:,:), 'N', &
                        damping_term)
       ! damping_term now contains rho^MO
-      ! Set the diagonal to zero - no damping on the diagonal
-      ! TODO : OMP Needed?
-      !$OMP PARALLEL DO DEFAULT(none) PRIVATE(i) SHARED(sbe_env,damping_term)
-      DO i=1,sbe_env%n_ao
-         damping_term(i,i) = 0.0_dp
+      ! New update -- multiply by soothed dephasing, with soothing width
+      ! TODO : Is the OMP here advantageous?
+      ! NOTE : order of loops so that fast changing index is on the inner loop
+      DO j=1,sbe_env%n_ao
+         DO i=1, sbe_env%n_ao
+            energy_exp = (sbe_env%eigvals(ispin, i) - sbe_env%eigvals(ispin, j)) &
+               / sbe_env%soothing_width
+            damping_term(i,j) = damping_term(i,j) * &
+               (1 - EXP(-energy_exp*energy_exp)) / sbe_env%dephasing_time
+         END DO
       END DO
-      !$OMP END PARALLEL DO
 
       ! Transfer back to AO
       CALL gemm_square(sbe_env%eigvectors(ispin,:,:),"N", &
@@ -374,22 +379,23 @@ CONTAINS
       max_buffer = 0.0_dp
       buffer = 0.0_dp
 
-      ! Multiply S * rho * S * rho * S
-      ! S * rho
-      CALL gemm_square(smat, "N", mat, "N", work(1,:,:))
-      ! (S * rho) * S
-      CALL gemm_square(work(1,:,:), "N", smat, "N", work(2,:,:))
-      ! (S * rho * S ) * rho
-      CALL gemm_square(work(2,:,:), "N", mat, "N", work(1,:,:))
-      ! (S * rho * S * rho ) * S
-      CALL gemm_square(work(1,:,:), "N", smat, "N", work(2,:,:))
-
-      ! Multiply S * rho * S
-      CALL gemm_square(smat, "N", mat, "N", smat, "N", work(1,:,:))
+      ! Assume the matrix is in contravariant form, then compare the matrix elements
+      ! i.e. operator hat(mat) is defined as
+      ! hat(mat) = sum_(mu nu) mat_(mu nu) |mu><nu|
+      ! The square is therefore
+      ! hat(mat^2) = sum_(mu nu mu' nu') mat_(mu nu) |mu><nu| mat_(mu' nu') |mu'><nu'| =
+      !            = sum_(mu nu) (mat * S * mat)_(mu nu) |mu><nu|
+      ! hence, we associate comparison of hat(mat) = hat(mat^2) with
+      ! comparison of mat and (mat * S * mat)
+      ! work(1) = mat * S
+      CALL gemm_square(mat, "N", smat, "N", work(1,:,:))
+      ! work(2) = mat * S * mat
+      CALL gemm_square(work(1,:,:), "N", mat, "N", work(2,:,:))
 
       DO i=1, n_ao
          DO j=1,n_ao
-            buffer = ABS(work(2,i,j) - work(1,i,j))
+            ! (mat * S * mat - mat)_(mu nu)
+            buffer = ABS(work(2,i,j) - mat(i,j))
             IF (buffer > max_buffer) THEN
                max_buffer = buffer
             END IF

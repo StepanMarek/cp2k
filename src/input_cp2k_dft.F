@@ -2409,7 +2409,17 @@ CONTAINS
               description="Dephasing $T_2$ time.", &
               type_of_var=real_t, &
               unit_str="fs", &
-              default_r_val=1.0_dp / femtoseconds)
+              default_r_val=1.0e3_dp / femtoseconds)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      ! Soothing width
+      CALL keyword_create(keyword, __LOCATION__, name="SOOTHING_WIDTH", &
+              description="Soothing width for the dephasing, so that electrons "// &
+              "are not removed by dephasing of the degenerate subspaces.", &
+              type_of_var=real_t, &
+              unit_str="eV", &
+              default_r_val=25.0e-3_dp / evolt)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

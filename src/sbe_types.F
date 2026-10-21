@@ -40,7 +40,7 @@ MODULE sbe_types
    USE cp_log_handling, ONLY: cp_logger_get_default_io_unit, &
                               cp_logger_type, &
                               cp_get_default_logger
-   USE physcon, ONLY: femtoseconds
+   USE physcon, ONLY: femtoseconds, evolt
    USE input_constants, ONLY: sbe_propagator_rk4, &
                               sbe_propagator_euler, &
                               sbe_kpoints_mpack, &
@@ -88,7 +88,8 @@ MODULE sbe_types
       INTEGER                                            :: propagator_method = sbe_propagator_rk4
       REAL(kind=dp)                                      :: sim_dt = 1.0e-3_dp / femtoseconds, &
                                                             sim_time = 0.0_dp, &
-                                                            dephasing_time = 1.0_dp / femtoseconds, &
+                                                            dephasing_time = 1.0e3_dp / femtoseconds, &
+                                                            soothing_width = 25.0e-3_dp / evolt, &
                                                             delta_pulse_scale = 0.0_dp
       REAL(kind=dp), DIMENSION(3)                        :: field = 0.0_dp, &
                                                             vector_potential = 0.0_dp, &
@@ -429,8 +430,12 @@ CONTAINS
       ! Phenomenological dephasing time
       CALL section_vals_val_get(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%DEPHASING_TIME", &
                                 r_val=sbe_env%dephasing_time)
+      CALL section_vals_val_get(force_input, "DFT%REAL_TIME_PROPAGATION%SBE%SOOTHING_WIDTH", &
+                                r_val=sbe_env%soothing_width)
       IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A20,E60.8E3)") &
          " SBE| Dephasing time", sbe_env%dephasing_time * femtoseconds
+      IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A20,E60.8E3)") &
+         " SBE| Soothing width", sbe_env%soothing_width * evolt
 
       ! Allocate time
       ALLOCATE (sbe_env%time_trace(sbe_env%sim_nsteps - sbe_env%sim_start + 1), source=0.0_dp)
