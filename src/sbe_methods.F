@@ -207,7 +207,7 @@ CONTAINS
       ! Damping term now contains rho_AO with MO-diagonals set to zero
       ! To finish the damping term, divide by T_2 time, multiply by correct sign
       ! TODO : OMP?
-      damping_term(:,:) = -damping_term(:,:) / sbe_env%dephasing_time
+      damping_term(:,:) = -damping_term(:,:)
 
       CALL timestop(handle)
    END SUBROUTINE
