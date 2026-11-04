@@ -94,7 +94,9 @@ MODULE sbe_types
       REAL(kind=dp), DIMENSION(3)                        :: field = 0.0_dp, &
                                                             vector_potential = 0.0_dp, &
                                                             field_next = 0.0_dp, &
-                                                            vector_potential_next = 0.0_dp
+                                                            vector_potential_next = 0.0_dp, &
+                                                            xkp_shift = 0.0_dp ! In the units of b-vector
+      REAL(kind=dp), DIMENSION(4,3)                      :: vector_potential_ks ! for RK4 staging TODO : on-demand allocation?
       INTEGER, DIMENSION(3)                              :: delta_pulse_direction = 0.0_dp
       LOGICAL                                            :: apply_delta_pulse = .FALSE.
       REAL(kind=dp), DIMENSION(3,3)                      :: hmat = 0.0_dp
