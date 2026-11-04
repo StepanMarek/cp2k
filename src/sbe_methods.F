@@ -20,6 +20,7 @@ MODULE sbe_methods
                                              get_mo_set
    USE kpoint_k_r_trafo_simple,        ONLY: rs_to_kp
    USE mathlib,                        ONLY: gemm_square
+   USE efield_utils,                   ONLY: make_field
    USE sbe_types,                      ONLY: sbe_env_type
 
 #include "./base/base_uses.f90"
@@ -37,6 +38,7 @@ MODULE sbe_methods
              get_convective_term, &
              bch_exp_propagate, &
              diagonalize_ham_zero, &
+             propagate_field, &
              add_occ_numbers_kp, &
              add_current_kp
 
@@ -218,40 +220,24 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE add_occ_numbers_kp(sbe_env, occ_numbers, densmat, ikp)
       TYPE(sbe_env_type), POINTER, INTENT(IN)               :: sbe_env
-      COMPLEX(kind=dp), DIMENSION(:,:)                         :: occ_numbers ! dim 1 : spin, dim 2 : band
+      COMPLEX(kind=dp), DIMENSION(:,:)                      :: occ_numbers ! dim 1 : spin, dim 2 : band
       COMPLEX(kind=dp), DIMENSION(:,:,:)                    :: densmat ! dim 1 : spin, dim 2 : rows, dim 3 : cols
       INTEGER                                               :: ikp
       INTEGER                                               :: n, info, ispin
-      ! ! DEBUG : orthogonality of MOs
-      ! INTEGER                                               :: i, j
+
       ! For current local kpoint, get the transformation from AO to get n_m(k)
-      ! Get the molecular orbitals
       DO ispin=1, sbe_env%n_spin
-         sbe_env%densmat_work(1,:,:) = sbe_env%ham_zero_kp(ispin,:,:)
-         sbe_env%densmat_work(2,:,:) = sbe_env%overlap_kp(:,:)
-         ! TODO : Use already present diagonalisation
-         CALL ZHEGV(1, 'V', 'U', sbe_env%n_ao, sbe_env%densmat_work(1,:,:), &
-                    sbe_env%n_ao, sbe_env%densmat_work(2,:,:), sbe_env%n_ao, &
-                    sbe_env%eigvals, sbe_env%eigwork, sbe_env%lwork, sbe_env%eigrwork, info)
-         ! With molecular orbitals in densmat_work(1,:,:), we can do the product
-         CALL gemm_square(sbe_env%densmat_work(1,:,:), 'C', sbe_env%overlap_kp, 'N', &
-                          densmat(ispin,:,:), 'N', sbe_env%densmat_work(2,:,:))
-         CALL gemm_square(sbe_env%densmat_work(2,:,:), 'N', sbe_env%overlap_kp, 'N', &
-                          sbe_env%densmat_work(1,:,:), 'N', sbe_env%densmat_work(3,:,:))
-         ! densmat_work(3) now contains occupations on the diagonal
+         ! Use sbe_env%eigvectors
+         CALL gemm_square(sbe_env%eigvectors(ispin,:,:), 'C', sbe_env%overlap_kp, 'N', &
+                          densmat(ispin,:,:), 'N', sbe_env%densmat_work(1,:,:))
+         CALL gemm_square(sbe_env%densmat_work(1,:,:), 'N', sbe_env%overlap_kp, 'N', &
+                          sbe_env%eigvectors(ispin,:,:), 'N', sbe_env%densmat_work(2,:,:))
+         ! densmat_work(2) now contains occupations on the diagonal
          DO n=1,SIZE(occ_numbers)
             ! TODO : Are occupation numbers always necceserily real?
             occ_numbers(ispin,n) = occ_numbers(ispin,n) + &
-               REAL(sbe_env%densmat_work(3,n,n), kind=dp) * sbe_env%kpoints%wkp(ikp)
+               REAL(sbe_env%densmat_work(2,n,n), kind=dp) * sbe_env%kpoints%wkp(ikp)
          END DO
-         ! ! DEBUG : Check precision in orthogonality of the MOs
-         ! CALL gemm_square(sbe_env%densmat_work(1,:,:), 'C', sbe_env%overlap_kp, 'N', &
-         !    sbe_env%densmat_work(1,:,:), 'N', sbe_env%densmat_work(3,:,:))
-         ! DO i=1,sbe_env%n_ao
-         !    DO j=1, sbe_env%n_ao
-         !       PRINT *, ikp, i, j, sbe_env%densmat_work(3,i,j)
-         !    END DO
-         ! END DO
       END DO
    END SUBROUTINE
 ! **************************************************************************************************
@@ -318,6 +304,7 @@ CONTAINS
       ! TODO : Loop for cartesian directions
       ! TODO : This might be a very good place to test the reallocation price
       DO k=1, 3
+         ! TODO : Here, change xkp to xkp_current, or in the passing routine
          CALL rs_to_kp(sbe_env%ham_zero_rs(ispin,:,:,:), sbe_env%densmat_work(1,:,:), &
             sbe_env%kpoints%index_to_cell, xkp, k, sbe_env%hmat)
 
@@ -539,4 +526,47 @@ CONTAINS
 
       CALL timestop(handle)
    END SUBROUTINE diagonalize_ham_zero
+! **************************************************************************************************
+!> \brief Propagates the field (both direct and vector potential) by the timestep provided
+!> \param sbe_env SBE ENV
+!> \param dt_opt Change in time, optional
+!> \param step_opt Change in steps, optional
+!> \author Stepan Marek
+!> \date 11.2026
+! **************************************************************************************************
+   SUBROUTINE propagate_field(sbe_env, field_next, vecpot_next, step_opt, dt_opt)
+      TYPE(sbe_env_type)                                    :: sbe_env
+      REAL(kind=dp), DIMENSION(3), INTENT(OUT)              :: field_next, &
+                                                               vecpot_next
+      INTEGER, INTENT(IN), OPTIONAL                         :: step_opt
+      REAL(kind=dp), INTENT(IN), OPTIONAL                   :: dt_opt
+
+      REAL(kind=dp)                                         :: dt
+      INTEGER                                               :: step
+
+      ! If there is no field, just output zeros
+      IF (.NOT. sbe_env%dft_control%apply_efield_field) THEN
+         field_next(:) = 0.0_dp
+         vecpot_next(:) = sbe_env%vector_potential(:)
+         RETURN
+      END IF
+
+      ! Continue with time-dependent field
+
+      ! Determine dt and step
+      dt = 0.0_dp
+      IF (PRESENT(dt_opt)) dt = dt_opt
+      step = 0
+      IF (PRESENT(step_opt)) step = step_opt
+
+      ! Next field
+      CALL make_field(sbe_env%dft_control, field_next, sbe_env%sim_step+step, sbe_env%sim_time + dt)
+
+      ! ! DEBUG : plain addition
+      ! vecpot_next(:) = sbe_env%vector_potential - &
+      !    sbe_env%field(:) * dt
+      ! Next vector potential, by trapezoidal rule
+      vecpot_next(:) = sbe_env%vector_potential(:) - &
+         0.5_dp * (sbe_env%field(:) + field_next(:)) * dt
+   END SUBROUTINE propagate_field
 END MODULE sbe_methods

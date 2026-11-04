@@ -51,6 +51,7 @@ MODULE sbe
                                              get_damping_term, &
                                              bch_exp_propagate, &
                                              add_occ_numbers_kp, &
+                                             propagate_field, &
                                              diagonalize_ham_zero! , &
                                              ! add_current_kp
    USE cp_dbcsr_api,                   ONLY: dbcsr_p_type, &
@@ -298,11 +299,13 @@ CONTAINS
             ! TODO : Indicate/change how the field is propagated
             ! TODO : Maybe implement field current and field next?
             ! TODO : For fields that are no longer changing, stop the update to speed up the simulation? Maybe via metric change?
-            CALL update_kp_matrices(sbe_env, ikp=i)
-            ! TODO : Only do C(k) calculations when needed -- probably separater routine from update_kp_matrices, or option there
-            CALL diagonalize_ham_zero(sbe_env)
             ! Actual propagation of the density rho(t) -> rho(t+dt)
             DO j=1,sbe_env%n_spin
+               ! Set the matrices to the current field
+               ! If there is more than one spin species
+               ! All spinless matrices are updated, only the j-spin matrices are updated
+               CALL update_kp_matrices(sbe_env, ikp=i, ispin_opt=j)
+               CALL diagonalize_ham_zero(sbe_env, ispin_opt=j)
                ! Log max idempotency violation in this k-point cycle
                buffer = nonidempot_metric(sbe_env%densmat(j,:,:,i_local), sbe_env%overlap_kp, sbe_env%densmat_work)
                ! ! DEBUG : Hermiticity violation printing
@@ -312,9 +315,11 @@ CONTAINS
                                       sbe_env%densmat_next(j,:,:,i_local), j, i, info)
             END DO
 
-            ! Observables done at next kpoint
+            ! All k-matrices are now evaluated at the next timestep, i.e. at time t+dt,
+            ! with exception of density matrix -- t+dt one is stored in densmat_next
 
-            ! Export k-resolved observables
+            ! K-point observables
+
             ! TODO : Only do when needed
             DO j=1, sbe_env%n_spin
                ! Determine the k-resolved occupations and save them
@@ -343,6 +348,7 @@ CONTAINS
                CALL add_occ_numbers_kp(sbe_env, sbe_env%occ_numbers, sbe_env%densmat_next(:,:,:,i_local), i)
                ! TODO : add current
                ! TODO : Spin
+               ! TODO : xkp is not offset by the vector potential -- fix - use field_next/vector_potential_next
                ! CALL add_current_kp(sbe_env, sbe_env%densmat(1,:,:,i_local), sbe_env%kpoints%xkp(:,i), 1, total_current(:), i)
             END IF
          END DO
@@ -388,8 +394,8 @@ CONTAINS
          ! Set the current density matrix for the next step
          sbe_env%densmat(:,:,:,:) = sbe_env%densmat_next(:,:,:,:)
 
-         ! Update the vector potential - A(t+dt) = A(t) - E(t) dt
-         sbe_env%vector_potential(:) = sbe_env%vector_potential(:) - sbe_env%sim_dt * sbe_env%field(:)
+         ! Update vector potential
+         sbe_env%vector_potential(:) = sbe_env%vector_potential_next(:)
 
       END DO
 
@@ -436,20 +442,24 @@ CONTAINS
          ! Add the non-commutator terms
          ! Add the damping term -- eigvectors set before
          CALL get_damping_term(sbe_env, sbe_env%damping, densmat_old(:,:), ispin)
+         ! k1 term for the density matrix
          sbe_env%densmat_work(1,:,:) = sbe_env%densmat_work(1,:,:) + sbe_env%damping(:,:)
+         ! k1 term for vector potential
+         sbe_env%vector_potential_ks(1,:) = - sbe_env%field(:)
          ! k2 and k3 terms are evaluated at t+Delta t/2 - recalculate h, S, S^(-1), eigectors and field
          ! k2 term
          ! Update the field, mid-point
          ! TODO : Sim-step interpolation?
-         IF (sbe_env%dft_control%apply_efield_field) THEN
-            CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step, &
-                            sbe_env%sim_time + 0.5_dp*sbe_env%sim_dt)
-         END IF
-         ! Add to vector potential A(t + dt/2) = A(t) - E(t) dt/2
-         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
-                                       0.5_dp*sbe_env%sim_dt * sbe_env%field(:)
+         CALL propagate_field(sbe_env, sbe_env%field_next, sbe_env%vector_potential_next, &
+            step_opt=0, dt_opt=0.5_dp*sbe_env%sim_dt)
+         sbe_env%vector_potential_ks(2,:) = - sbe_env%field_next(:)
+         ! Use staging vector potential from k1 for kp-matrices
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + &
+            sbe_env%vector_potential_ks(1,:) * 0.5_dp * sbe_env%sim_dt
          ! Since vector potential changes, update kp matrices
-         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, sbe_env%field(:), &
+         ! TODO : Here, sbe_env%field_next should be used in proper RK4, but lead to some non-idempotency in the past
+         ! TODO : Benchmark in the final code/explain better idempotency if left unchanged
+         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, sbe_env%field_next(:), &
             ispin_opt=ispin)
          ! Update the eigvectors
          CALL diagonalize_ham_zero(sbe_env, ispin_opt=ispin)
@@ -466,6 +476,13 @@ CONTAINS
                                ispin)
          sbe_env%densmat_work(2,:,:) = sbe_env%densmat_work(2,:,:) + sbe_env%damping(:,:)
          ! k3 term
+         sbe_env%vector_potential_ks(3,:) = - sbe_env%field_next(:)
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + &
+            sbe_env%vector_potential_ks(2,:) * 0.5_dp * sbe_env%sim_dt
+         ! Vector potential updated, update kp-matrices
+         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, sbe_env%field_next(:), &
+            ispin_opt=ispin)
+         CALL diagonalize_ham_zero(sbe_env, ispin_opt=ispin)
          CALL propagator_commutator(sbe_env%densmat_work(3,:,:), &
                                     sbe_env%inv_overlap_kp(:,:), &
                                     sbe_env%ham_kp(ispin,:,:), &
@@ -479,16 +496,13 @@ CONTAINS
          sbe_env%densmat_work(3,:,:) = sbe_env%densmat_work(3,:,:) + sbe_env%damping(:,:)
          ! k4 term is evaluated at t+Delta t - recalculate h, S, S^(-1) and field
          ! k4 term
-         ! Update the field, final time
-         IF (sbe_env%dft_control%apply_efield_field) THEN
-            CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step + 1, &
-                            sbe_env%sim_time + sbe_env%sim_dt)
-         END IF
-         ! Add to vector potential A(t+dt) = A(t) - E(t) dt
-         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
-                                       sbe_env%sim_dt*sbe_env%field(:) ! Forward
+         CALL propagate_field(sbe_env, sbe_env%field_next, sbe_env%vector_potential_next, &
+            step_opt=1, dt_opt=sbe_env%sim_dt)
+         sbe_env%vector_potential_ks(4,:) = - sbe_env%field_next(:)
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + &
+            sbe_env%vector_potential_ks(3,:) * sbe_env%sim_dt
          ! Since vector potential changes, update kp matrices
-         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, sbe_env%field(:), &
+         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, sbe_env%field_next(:), &
             ispin_opt=ispin)
          ! Update the eigvectors
          CALL diagonalize_ham_zero(sbe_env, ispin_opt=ispin)
@@ -507,6 +521,13 @@ CONTAINS
          densmat_new(:,:) = densmat_old(:,:) + &
             sbe_env%sim_dt * (sbe_env%densmat_work(1,:,:) + 2.0_dp * sbe_env%densmat_work(2,:,:) + &
                2.0_dp * sbe_env%densmat_work(3,:,:) + sbe_env%densmat_work(4,:,:)) / 6.0_dp
+         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) + (sbe_env%sim_dt / 6.0_dp) * &
+            (sbe_env%vector_potential_ks(1,:) + 2.0_dp * sbe_env%vector_potential_ks(2,:) + &
+            2.0_dp * sbe_env%vector_potential_ks(3,:) + sbe_env%vector_potential_ks(4,:))
+         ! Determine the kp-matrices at the proper integrated k-point
+         CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, sbe_env%field_next(:), &
+            ispin_opt=ispin)
+         CALL diagonalize_ham_zero(sbe_env, ispin_opt=ispin)
          info = 0
       CASE (sbe_propagator_etrs)
          ! rho(t + dt/2) = U^dagger[H(t),dt/2] rho(t) U[H(t),dt/2]
@@ -516,12 +537,8 @@ CONTAINS
             1.0E-15_dp, info, sbe_env%densmat_work, 50)
          ! rho(t + dt) = U^dagger[H(t+dt),dt/2] rho(t+dt/2) U[H(t+dt),dt/2]
          ! Update field and matrices
-         IF (sbe_env%dft_control%apply_efield_field) THEN
-            CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step + 1, &
-                            sbe_env%sim_time + sbe_env%sim_dt)
-         END IF
-         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
-            sbe_env%sim_dt * sbe_env%field(:)
+         CALL propagate_field(sbe_env, sbe_env%field_next, sbe_env%vector_potential_next, &
+            step_opt=1, dt_opt=sbe_env%sim_dt)
          CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, &
             sbe_env%field_next(:), ispin_opt=ispin)
          ! Set the eigvectors to _next time point
@@ -545,12 +562,8 @@ CONTAINS
             sbe_env%sim_dt * sbe_env%densmat_work(1,:,:)
          info = 0
          ! Set the kp matrices and eigvectors to _next timepoint
-         IF (sbe_env%dft_control%apply_efield_field) THEN
-            CALL make_field(sbe_env%dft_control, sbe_env%field_next, sbe_env%sim_step + 1, &
-                            sbe_env%sim_time + sbe_env%sim_dt)
-         END IF
-         sbe_env%vector_potential_next(:) = sbe_env%vector_potential(:) - &
-            sbe_env%sim_dt * sbe_env%field(:)
+         CALL propagate_field(sbe_env, sbe_env%field_next, sbe_env%vector_potential_next, &
+            step_opt=1, dt_opt=sbe_env%sim_dt)
          CALL update_kp_matrices(sbe_env, ikp, sbe_env%vector_potential_next, sbe_env%field_next, &
             ispin_opt=ispin)
          CALL diagonalize_ham_zero(sbe_env, ispin_opt=ispin)
@@ -602,13 +615,16 @@ CONTAINS
       ikp_local = ikp - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
 
       ! Calculate the xkp based on equilibrium xkp and vector potential
+      ! Save the shift for use with observables
       IF (PRESENT(current_vector_opt)) THEN
-         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) - &
-            MATMUL(TRANSPOSE(sbe_env%hmat), current_vector_opt(:)) / twopi
+         sbe_env%xkp_shift(:) = &
+            - MATMUL(TRANSPOSE(sbe_env%hmat), current_vector_opt(:)) / twopi
       ELSE
-         xkp_current(:) = sbe_env%kpoints%xkp(:,ikp) - &
-            MATMUL(TRANSPOSE(sbe_env%hmat), sbe_env%vector_potential(:)) / twopi
+         sbe_env%xkp_shift(:) = &
+            - MATMUL(TRANSPOSE(sbe_env%hmat), sbe_env%vector_potential(:)) / twopi
       END IF
+
+      xkp_current(:) = sbe_env%kpoints%xkp(:, ikp) + sbe_env%xkp_shift(:)
 
       ! Determine the field
       IF (PRESENT(field_opt)) THEN
