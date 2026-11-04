@@ -4246,7 +4246,7 @@ SUBROUTINE qs_moment_kpoints_deep(qs_env, xkp, dipole, rcc, berry_c, momentum, e
                                      rcc, &
                                      berry_c, &
                                      do_parallel=.TRUE., &
-                                     do_hfx=do_hfx)
+                                     do_hfx_opt=do_hfx)
          nmo_dim = nao
       END IF
 
