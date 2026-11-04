@@ -3648,10 +3648,10 @@ CONTAINS
 !>        different MPI ranks
 !> \author Shridhar Shanbhag
 ! **************************************************************************************************
-   SUBROUTINE qs_moment_kpoints_deep(qs_env, xkp, dipole, rcc, berry_c, do_parallel)
+   SUBROUTINE qs_moment_kpoints_deep(qs_env, xkp, dipole, rcc, berry_c, do_parallel, do_hfx_opt)
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      LOGICAL, OPTIONAL                                  :: do_parallel
-      LOGICAL                                            :: my_do_parallel, calc_bc
+      LOGICAL, OPTIONAL                                  :: do_parallel, do_hfx_opt
+      LOGICAL                                            :: my_do_parallel, calc_bc, do_hfx
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'qs_moment_kpoints_deep'
       COMPLEX(KIND=dp)                                   :: phase, tmp_max
       COMPLEX(KIND=dp), DIMENSION(:, :), ALLOCATABLE     :: C_k, H_k, S_k, D_k, CDC, C_dH_C, &
@@ -3701,6 +3701,13 @@ CONTAINS
                       para_env=para_env, &
                       dft_control=dft_control, &
                       mos=mos)
+      do_hfx = .FALSE.
+      IF (PRESENT(do_hfx_opt)) THEN
+         do_hfx = do_hfx_opt
+         IF (do_hfx) THEN
+            CALL get_qs_env(qs_env, sab_kp_nosym=sab_all)
+         END IF
+      END IF
 
       CALL get_mo_set(mo_set=mos(1), nao=nao)
       CALL get_cell(cell=cell, h=hmat, periodic=periodic)
@@ -3720,7 +3727,11 @@ CONTAINS
       NULLIFY (moments_rs_img)
       CALL dbcsr_allocate_matrix_set(moments_rs_img, 3, n_img_all)
       ! D_μ,ν = <φ_μ|r|φ_ν>
-      CALL build_local_moment_matrix_rs_img(qs_env, moments_rs_img, rcc=my_rcc)
+      IF (do_hfx) THEN
+         CALL build_local_moment_matrix_rs_img(qs_env, moments_rs_img, rcc=my_rcc, sab_ext=sab_all)
+      ELSE
+         CALL build_local_moment_matrix_rs_img(qs_env, moments_rs_img, rcc=my_rcc)
+      END IF
 
       ALLOCATE (S_rs(1, nao, nao, n_img_all), H_rs(nspin, nao, nao, n_img_all), source=0.0_dp)
       ALLOCATE (D_rs(3, nao, nao, n_img_all), source=0.0_dp)
@@ -4081,9 +4092,10 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :, :, :), ALLOCATABLE  :: berry_c
       TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(mp_para_env_type), POINTER                    :: para_env
-      TYPE(section_vals_type), POINTER                   :: kpnts, kpset
+      TYPE(section_vals_type), POINTER                   :: kpnts, kpset, hfx_section
       CHARACTER(LEN=default_string_length), &
          DIMENSION(:), POINTER                           :: special_pnts
+      LOGICAL                                            :: do_hfx
 
       CALL timeset(routineN, handle)
 
@@ -4103,6 +4115,8 @@ CONTAINS
 
       kpset => section_vals_get_subs_vals(qs_env%input, "DFT%PRINT%MOMENTS%KPOINT_SET")
       kpnts => section_vals_get_subs_vals(qs_env%input, "DFT%PRINT%MOMENTS%KPOINTS")
+      hfx_section => section_vals_get_subs_vals(qs_env%input, "DFT%XC%HF")
+      CALL section_vals_get(hfx_section, explicit=do_hfx)
       CALL section_vals_get(kpset, explicit=explicit_kpset)
       CALL section_vals_get(kpnts, explicit=explicit_kpnts)
       use_scf_mos = .NOT. explicit_kpset .AND. .NOT. explicit_kpnts
@@ -4135,7 +4149,8 @@ CONTAINS
                                      dipole, &
                                      rcc, &
                                      berry_c, &
-                                     do_parallel=.TRUE.)
+                                     do_parallel=.TRUE., &
+                                     do_hfx=do_hfx)
          nmo_dim = nao
       END IF
 
