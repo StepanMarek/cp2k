@@ -4150,7 +4150,7 @@ CONTAINS
                                      rcc, &
                                      berry_c, &
                                      do_parallel=.TRUE., &
-                                     do_hfx=do_hfx)
+                                     do_hfx_opt=do_hfx)
          nmo_dim = nao
       END IF
 
