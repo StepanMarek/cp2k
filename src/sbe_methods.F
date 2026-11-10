@@ -286,33 +286,54 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 02.2025
 ! **************************************************************************************************
-   SUBROUTINE add_current_kp(sbe_env, densmat, xkp, ispin, current, ikp)
+   SUBROUTINE add_current_kp(sbe_env, densmat, ispin, current, ikp)
       TYPE(sbe_env_type), POINTER, INTENT(IN)               :: sbe_env
       COMPLEX(kind=dp), DIMENSION(:,:), INTENT(INOUT)       :: densmat
-      REAL(kind=dp), DIMENSION(3), INTENT(IN)               :: xkp
       INTEGER, INTENT(IN)                                   :: ispin
       COMPLEX(kind=dp), DIMENSION(3), INTENT(OUT)           :: current
       CHARACTER(len=*), PARAMETER                           :: routineN="add_current_kp"
+      REAL(kind=dp), DIMENSION(3)                           :: xkp
       INTEGER                                               :: i, &
                                                                handle, &
                                                                k, j, ikp
 
       CALL timeset(routineN, handle)
 
-      ! Get the k-derivative of the Hamiltonian, store it in the densmat workspace
-      ! should be done after propagation?
-      ! TODO : Loop for cartesian directions
+      ! Determine the offset xkp
+      xkp(:) = sbe_env%kpoints%xkp(:,ikp) + sbe_env%xkp_shift(:)
+
+      ! Loop for cartesian directions
       ! TODO : This might be a very good place to test the reallocation price
       DO k=1, 3
-         ! TODO : Here, change xkp to xkp_current, or in the passing routine
+         ! Get the k-derivative of the Hamiltonian, store it in the densmat workspace
+         ! should be done after propagation?
          CALL rs_to_kp(sbe_env%ham_zero_rs(ispin,:,:,:), sbe_env%densmat_work(1,:,:), &
             sbe_env%kpoints%index_to_cell, xkp, k, sbe_env%hmat)
 
+         ! Hamiltonian, inverted overlap and dipoles should be ready from the propagation
+         ! H * S^{-1} = densmat_work(3)
+         CALL gemm_square(sbe_env%ham_zero_kp(ispin,:,:), "N", sbe_env%inv_overlap_kp(:,:), "N", &
+            sbe_env%densmat_work(3,:,:))
+         ! Conjugate -- dipole matrix is not Hermitian
+         ! H * S^{-1} * d^dagger = densmat_work(2)
+         CALL gemm_square(sbe_env%densmat_work(3,:,:), "N", sbe_env%moments_kp(k,:,:), "C", &
+            sbe_env%densmat_work(2,:,:))
+
+         ! d * S^{-1} = densmat_work(4)
+         CALL gemm_square(sbe_env%moments_kp(k,:,:), "N", sbe_env%inv_overlap_kp(:,:), "N", &
+            sbe_env%densmat_work(4,:,:))
+         ! d * S^{-1} * H = densmat_work(3)
+         CALL gemm_square(sbe_env%densmat_work(4,:,:), "N", sbe_env%ham_zero_kp(ispin,:,:), "N", &
+            sbe_env%densmat_work(3,:,:))
+
          ! TODO : OMP Parallelize the trace? Could be unstable...
-         DO i=1, SIZE(densmat, 2)
-            DO j=1, SIZE(densmat, 1)
-               current(k) = current(k) + sbe_env%densmat_work(1,i,j) * densmat(j,i) * &
-                  sbe_env%kpoints%wkp(ikp)
+         DO j=1, SIZE(densmat, 2)
+            DO i=1, SIZE(densmat, 1)
+               current(k) = current(k) + sbe_env%kpoints%wkp(ikp) * densmat(i,j) * ( &
+                  - sbe_env%densmat_work(1,j,i) + & ! intraband current term
+                  CMPLX(0.0, -1.0, kind=dp) * ( & ! interband current term
+                     sbe_env%densmat_work(2,j,i) - sbe_env%densmat_work(3,j,i) &
+                  )) * (3.0_dp - REAL(sbe_env%n_spin, kind=dp)) ! Spin multiplicity
             END DO
          END DO
       END DO

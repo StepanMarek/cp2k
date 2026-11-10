@@ -45,6 +45,7 @@ MODULE sbe_io
    PUBLIC :: output_field, &
             output_occupation_file, &
             output_occupations_kp_file, &
+            output_current, &
             print_mat, &
             gather_occupations, &
             output_ham_rs_restart, &
@@ -200,6 +201,85 @@ CONTAINS
       DEALLOCATE (z_occ)
 
    END SUBROUTINE output_occupation_file
+! **************************************************************************************************
+!> \brief Prints the average current -- real and imaginary part for each
+!> \param current The average current expectation value
+!> \param time Current simulation time
+!> \param current_print_section Section specifying the filename, iterations etc.
+!> \param header_opt when true, prints the header to a file, defaults to false
+!> \author Stepan Marek
+!> \date 11.2026
+! **************************************************************************************************
+   SUBROUTINE output_current(current, time, current_print_section, do_headers)
+      COMPLEX(kind=dp), DIMENSION(3), INTENT(IN)         :: current
+      REAL(kind=dp), INTENT(IN)                          :: time
+      TYPE(section_vals_type), INTENT(IN)                :: current_print_section
+      LOGICAL, INTENT(IN)                                :: do_headers
+      CHARACTER(len=*), PARAMETER                        :: routineN="output_current"
+      REAL(kind=dp), DIMENSION(1)                        :: times
+      COMPLEX(kind=dp), DIMENSION(3,1)                   :: yvals
+      INTEGER                                            :: unit_nr, &
+                                                            handle
+      TYPE(cp_logger_type), POINTER                      :: logger
+      CHARACTER(len=21)                                  :: prefix
+      CHARACTER(len=5)                                   :: prefix_format
+      CHARACTER(len=20), DIMENSION(7)                    :: headers
+      INTEGER                                            :: flags
+      INTEGER, PARAMETER                                 :: prefix_flag = 1, &
+                                                            header_flag = 2, &
+                                                            both_flags = 3
+
+      CALL timeset(routineN, handle)
+
+      ! Binary flags
+      flags = 0
+      ! Create the xvals array
+      times(1) = time
+      ! Create yvals array
+      yvals(:,1) = current(:)
+
+      ! Check the output unit
+      logger => cp_get_default_logger()
+      unit_nr = cp_print_key_unit_nr(logger, current_print_section, extension=".dat")
+
+      ! If this is the default unit, add distinguishing prefix
+      IF (unit_nr == cp_logger_get_default_io_unit(logger)) THEN
+         prefix = " SBE_CURRENT|"
+         prefix_format = "(A13)"
+         flags = IOR(flags, prefix_flag)
+      END IF
+
+      ! If headers are to be done, define them
+      IF (do_headers) THEN
+         headers(1) = "#          Time [fs]"
+         headers(2) = "       Re(current)_x"
+         headers(3) = "       Im(current)_x"
+         headers(4) = "       Re(current)_y"
+         headers(5) = "       Im(current)_y"
+         headers(6) = "       Re(current)_z"
+         headers(7) = "       Im(current)_z"
+         flags = IOR(flags, header_flag)
+      END IF
+
+      ! Execute the call to print file
+      SELECT CASE (flags)
+         CASE (both_flags)
+            CALL print_rt_file(unit_nr, xvals=times, yvals=yvals, xscale_opt=femtoseconds, &
+               prefix=prefix, prefix_format=prefix_format, headers=headers)
+         CASE (header_flag)
+            CALL print_rt_file(unit_nr, xvals=times, yvals=yvals, xscale_opt=femtoseconds, &
+               headers=headers)
+         CASE (prefix_flag)
+            CALL print_rt_file(unit_nr, xvals=times, yvals=yvals, xscale_opt=femtoseconds, &
+               prefix=prefix, prefix_format=prefix_format)
+         CASE (0)
+            CALL print_rt_file(unit_nr, xvals=times, yvals=yvals, xscale_opt=femtoseconds)
+         CASE DEFAULT
+            CPABORT("Unknown flag in output_current")
+      END SELECT
+
+      CALL timestop(handle)
+   END SUBROUTINE output_current
 ! **************************************************************************************************
 !> \brief Pretty prints a complex matrix
 !> \param mat Matrix to be pretty printed
@@ -581,6 +661,16 @@ CONTAINS
       ! Gather eigenvalues to the IO rank
       ! We gather spin by spin
       DO j = 1, n_spin
+         ! TODO : Redo as polymorphic gather, use kset_dist, which has to be newly passed to the routine
+         ! DO k = 1, n_ao
+         !    ! Not contiguous, but distributed along this direction
+         !    CALL polymorphic_gather(&
+         !       local_eigvals(j,k,:), &
+         !       gathered_eigvals(j,k,:), &
+         !       kpoints%para_env, &
+         !       kpoints%kp_dist
+         !       )
+         ! END DO
          CALL kpoints%para_env%gather( &
             local_eigvals(j,:,:), &
             gathered_eigvals(j,:,:) &
