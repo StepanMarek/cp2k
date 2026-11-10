@@ -123,6 +123,7 @@ MODULE sbe_types
                                                             ham_rs_restart_section, &
                                                             bandstructure_section, &
                                                             occ_section, &
+                                                            current_section, &
                                                             run_info_section
    END TYPE sbe_env_type
 
@@ -193,6 +194,7 @@ CONTAINS
       sbe_env%field_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%FIELD")
       sbe_env%occ_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%OCCUPATIONS_MO")
       sbe_env%occ_kp_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%OCCUPATIONS_KP")
+      sbe_env%current_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%CURRENT_INT")
       sbe_env%ham_rs_restart_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%RESTART_HAM")
       sbe_env%bandstructure_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%BANDSTRUCTURE")
       sbe_env%run_info_section => section_vals_get_subs_vals(force_input, "DFT%REAL_TIME_PROPAGATION%PRINT%PROGRAM_RUN_INFO")
@@ -383,6 +385,7 @@ CONTAINS
                 sbe_env%n_ao, sbe_env%local_nkp), source=CMPLX(0.0, 0.0, kind=dp))
       ! TODO : Different numbers for different propagators - we start with euler/RK4, which is determined by RK4
       ! RK4 requires 4, Euler requires 1, damping requires ...
+      ! Also used by current, which requires 4
       ALLOCATE (sbe_env%densmat_work(4, sbe_env%n_ao, sbe_env%n_ao), source=CMPLX(0.0, 0.0, kind=dp))
       ! Allocate space for eigenvalues
       ALLOCATE (sbe_env%eigvals(sbe_env%n_spin, sbe_env%n_ao), source=0.0_dp)

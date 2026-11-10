@@ -35,6 +35,7 @@ MODULE sbe
                                              print_mat, &
                                              gather_occupations, &
                                              output_occupations_kp_file, &
+                                             output_current, &
                                              output_ham_rs_restart, &
                                              read_ham_rs_restart, &
                                              output_run_info, &
@@ -52,8 +53,8 @@ MODULE sbe
                                              bch_exp_propagate, &
                                              add_occ_numbers_kp, &
                                              propagate_field, &
-                                             diagonalize_ham_zero! , &
-                                             ! add_current_kp
+                                             diagonalize_ham_zero, &
+                                             add_current_kp
    USE cp_dbcsr_api,                   ONLY: dbcsr_p_type, &
                                              dbcsr_type, &
                                              dbcsr_create, &
@@ -115,7 +116,7 @@ CONTAINS
               POINTER                                    :: sab_nl
       TYPE(sbe_env_type), POINTER                        :: sbe_env
       REAL(kind=dp)                                      :: total_n, lambda, buffer, max_buffer
-      ! COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
+      COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
       TYPE(cp_logger_type), POINTER                      :: logger
       REAL(kind=dp), DIMENSION(:), POINTER               :: ref_custom
 
@@ -174,6 +175,7 @@ CONTAINS
       CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index, 1)
 
       ! Print initial bandstructure
+      ! TODO : Fix -- redo gather to polymorphic, use matrices from rho-init
       CALL print_bandstructure(sbe_env%ham_zero_rs, sbe_env%overlap_rs, &
          sbe_env%bandstructure_section, sbe_env%kpoints, sbe_env%kpoints%xkp, &
          sbe_env%lwork, sbe_env%eigwork, sbe_env%eigrwork)
@@ -287,7 +289,7 @@ CONTAINS
 
          ! Reset occupation numbers
          sbe_env%occ_numbers(:,:) = 0.0_dp
-         ! total_current(:) = CMPLX(0.0, 0.0, kind=dp)
+         total_current(:) = CMPLX(0.0, 0.0, kind=dp)
 
          ! Iteration over local kpoints
          ! TODO : Run OMP over local kpoints or not?
@@ -347,9 +349,11 @@ CONTAINS
                i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
                CALL add_occ_numbers_kp(sbe_env, sbe_env%occ_numbers, sbe_env%densmat_next(:,:,:,i_local), i)
                ! TODO : add current
-               ! TODO : Spin
-               ! TODO : xkp is not offset by the vector potential -- fix - use field_next/vector_potential_next
-               ! CALL add_current_kp(sbe_env, sbe_env%densmat(1,:,:,i_local), sbe_env%kpoints%xkp(:,i), 1, total_current(:), i)
+               DO j=1,sbe_env%n_spin
+                  ! TODO : Spin resolved current
+                  ! TODO : could just pass both spins of densmat_next?
+                  CALL add_current_kp(sbe_env, sbe_env%densmat_next(j,:,:,i_local), j, total_current(:), i)
+               END DO
             END IF
          END DO
          ! Info can report e.g. self-consistency failures
@@ -362,21 +366,28 @@ CONTAINS
          !        (definitely when printing occupations or run_info)
          IF (sbe_env%integrand_nkp > 0) THEN
             CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
+            CALL sbe_env%kpoints%para_env%sum(total_current)
          END IF
 
          ! Increment iterations
          CALL cp_iterate(logger%iter_info, iter_nr=i_step, last=(i_step == sbe_env%sim_nsteps))
+
          ! Outputs
+
+         ! We are now at the next time
+         sbe_env%sim_time = REAL(i_step+1, kind=dp) * sbe_env%sim_dt
 
          ! Run info
          CALL output_run_info(sbe_env, max_buffer)
 
-         ! TODO : current calculation in AO
-         ! CALL sbe_env%kpoints%para_env%sum(total_current)
+         ! Polarisation current calculation in AO
+         ! TODO : Imaginary part output?
          ! IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E20.8E3,E20.8E3,E20.8E3)") &
          !    " SBE| Timestep ", i_step, &
          !    " time ", sbe_env%sim_time * femtoseconds, " current ", &
          !    REAL(total_current(1)), REAL(total_current(2)), REAL(total_current(3))
+         CALL output_current(total_current, sbe_env%sim_time, sbe_env%current_section, &
+            do_headers = (i_step == sbe_env%sim_start_orig))
 
          ! Output occupations/vacancies into files
          ! Only output when there is some data, i.e. there is some integrand distribution
@@ -618,10 +629,10 @@ CONTAINS
       ! Save the shift for use with observables
       IF (PRESENT(current_vector_opt)) THEN
          sbe_env%xkp_shift(:) = &
-            - MATMUL(TRANSPOSE(sbe_env%hmat), current_vector_opt(:)) / twopi
+            MATMUL(TRANSPOSE(sbe_env%hmat), current_vector_opt(:)) / twopi
       ELSE
          sbe_env%xkp_shift(:) = &
-            - MATMUL(TRANSPOSE(sbe_env%hmat), sbe_env%vector_potential(:)) / twopi
+            MATMUL(TRANSPOSE(sbe_env%hmat), sbe_env%vector_potential(:)) / twopi
       END IF
 
       xkp_current(:) = sbe_env%kpoints%xkp(:, ikp) + sbe_env%xkp_shift(:)
@@ -650,7 +661,7 @@ CONTAINS
          ! Moments
          CALL rs_to_kp(sbe_env%moments_rs(j,:,:,:), sbe_env%moments_kp(j,:,:), &
                        sbe_env%kpoints%index_to_cell, xkp_current)
-         ! Overlap gradient
+         ! Overlap gradient -- TODO : Is this still needed?
          CALL rs_to_kp(sbe_env%overlap_rs(1,:,:,:), sbe_env%overlap_grad(j,:,:), &
                        sbe_env%kpoints%index_to_cell, xkp_current, &
                        j, sbe_env%hmat)
@@ -681,8 +692,9 @@ CONTAINS
          ! ham_zero_kp is now manifestly Hermitian
          ! With moments in place, construct the effective Hamiltonian
          ! ham_kp already contains ham_zero_kp
+         ! TODO : Decide and test the sign convention
          DO j = 1, 3
-            sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_kp(ispin, :, :) - &
+            sbe_env%ham_kp(ispin, :, :) = sbe_env%ham_kp(ispin, :, :) + &
                field(j) * sbe_env%moments_kp(j,:,:)
          END DO
       END DO
