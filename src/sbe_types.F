@@ -66,6 +66,7 @@ MODULE sbe_types
                                                             kset_nkp
       INTEGER, DIMENSION(:,:), ALLOCATABLE               :: integrand_dist, & ! distribution of integrable kpoints
                                                             kset_dist ! distribution of k-resolved kpoints
+      REAL(kind=dp), DIMENSION(:,:), POINTER             :: kset_xkp
       TYPE(dft_control_type), POINTER                    :: dft_control => NULL()
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
               POINTER                                    :: sab_all => NULL()
@@ -165,8 +166,7 @@ CONTAINS
       LOGICAL                                            :: do_hfx
       INTEGER, DIMENSION(:), POINTER                     :: mpack_dim
       TYPE(kpoint_set_type), DIMENSION(:), ALLOCATABLE   :: kp_sets
-      REAL(kind=dp), DIMENSION(:,:), POINTER             :: mpack_xkp, &
-                                                            kset_xkp
+      REAL(kind=dp), DIMENSION(:,:), POINTER             :: mpack_xkp
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: mpack_wkp, &
                                                             kset_wkp
 
@@ -273,18 +273,18 @@ CONTAINS
             sbe_env%kset_nkp = sbe_env%kset_nkp + &
                kp_sets(i)%n_segments * kp_sets(i)%nkp + 1
          END DO
-         NULLIFY (kset_xkp)
-         ALLOCATE (kset_xkp(3,sbe_env%kset_nkp), source=0.0_dp)
+         NULLIFY (sbe_env%kset_xkp)
+         ALLOCATE (sbe_env%kset_xkp(3,sbe_env%kset_nkp), source=0.0_dp)
          ! By default, no integration, so no kpoint weight
          ALLOCATE (kset_wkp(sbe_env%kset_nkp), source=0.0_dp)
          ! Copy + union the segments
          DO i=1, SIZE(kp_sets, 1)
             ! TODO : Set offsets
             DO j=1, kp_sets(i)%n_segments
-               IF (j==1) kset_xkp(:,1) = kp_sets(i)%xkp(:, 1, 1)
+               IF (j==1) sbe_env%kset_xkp(:,1) = kp_sets(i)%xkp(:, 1, 1)
                ! For all segments, we iterate up to last, which is nkp+1
                DO k=2, kp_sets(i)%nkp+1
-                  kset_xkp(:,kp_sets(i)%nkp*(j-1) + k) = &
+                  sbe_env%kset_xkp(:,kp_sets(i)%nkp*(j-1) + k) = &
                      kp_sets(i)%xkp(:, k, j)
                END DO
             END DO
@@ -293,17 +293,16 @@ CONTAINS
       ELSE
          ! Empty kset
          sbe_env%kset_nkp = 0
-         NULLIFY (kset_xkp)
-         ALLOCATE (kset_xkp(3,0))
+         NULLIFY (sbe_env%kset_xkp)
+         ALLOCATE (sbe_env%kset_xkp(3,0))
          ALLOCATE (kset_wkp(0))
       END IF
 
       ! Calculate the distribution
       CALL sbe_create_kpoint_dist(sbe_env%kpoints, sbe_env%integrand_dist, sbe_env%kset_dist, & ! Outputs
-                                      mpack_xkp, kset_xkp, mpack_wkp, kset_wkp, & ! Inputs
+                                      mpack_xkp, sbe_env%kset_xkp, mpack_wkp, kset_wkp, & ! Inputs
                                       efficiency) ! Efficiency report
 
-      DEALLOCATE (kset_xkp)
       DEALLOCATE (kset_wkp)
       DEALLOCATE (mpack_xkp)
       DEALLOCATE (mpack_wkp)
@@ -480,7 +479,9 @@ CONTAINS
 
       CPASSERT(ASSOCIATED(sbe_env))
 
+      DEALLOCATE (sbe_env%kset_xkp)
       DEALLOCATE (sbe_env%kset_dist)
+
       DEALLOCATE (sbe_env%integrand_dist)
       CALL kpoint_release(sbe_env%kpoints)
 

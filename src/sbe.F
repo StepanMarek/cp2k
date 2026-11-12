@@ -39,6 +39,7 @@ MODULE sbe
                                              output_ham_rs_restart, &
                                              read_ham_rs_restart, &
                                              output_run_info, &
+                                             prepare_bandstructure, &
                                              print_bandstructure
    USE sbe_utils,                      ONLY: print_sbe_header_info
    USE sbe_types,                      ONLY: sbe_env_type, &
@@ -72,6 +73,7 @@ MODULE sbe
                               cp_get_default_logger
    USE cp_output_handling, ONLY: cp_add_iter_level, &
                                  cp_rm_iter_level, &
+                                 cp_print_key_should_output, &
                                  cp_iterate
    USE physcon,                        ONLY: femtoseconds
    USE mathlib,                        ONLY: invcmat, &
@@ -106,6 +108,7 @@ CONTAINS
                                                             i_step, &
                                                             i, &
                                                             i_local, &
+                                                            i_kset_local, &
                                                             j, k, &
                                                             info, &
                                                             handle
@@ -119,6 +122,11 @@ CONTAINS
       COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
       TYPE(cp_logger_type), POINTER                      :: logger
       REAL(kind=dp), DIMENSION(:), POINTER               :: ref_custom
+      LOGICAL                                            :: do_current_output
+      ! Variables for bandstructure
+      ! TODO : Maybe separate actual run and pre-run preparation
+      REAL(kind=dp), DIMENSION(:,:,:), ALLOCATABLE       :: local_eigvals
+      REAL(kind=dp), DIMENSION(:,:,:), POINTER           :: global_eigvals
 
       unit_nr = cp_logger_get_default_io_unit()
       IF (unit_nr > 0) CALL print_sbe_header_info(unit_nr)
@@ -174,12 +182,6 @@ CONTAINS
       CALL get_qs_env(qs_env, matrix_s_kp=matrix_s_kp, kpoints=kpoints)
       CALL replicate_rs_matrices(matrix_s_kp, kpoints, sbe_env%overlap_rs, sbe_env%kpoints%cell_to_index, 1)
 
-      ! Print initial bandstructure
-      ! TODO : Fix -- redo gather to polymorphic, use matrices from rho-init
-      CALL print_bandstructure(sbe_env%ham_zero_rs, sbe_env%overlap_rs, &
-         sbe_env%bandstructure_section, sbe_env%kpoints, sbe_env%kpoints%xkp, &
-         sbe_env%lwork, sbe_env%eigwork, sbe_env%eigrwork)
-
       ! Check the Hermiticity of the real-space Hamiltonian
       ! NOTE : Hamiltonian is not Hermitian mirror-image-wise -- Hermitian conjugate of image
       ! is identical only to the mirror image, not the image itself
@@ -211,6 +213,9 @@ CONTAINS
       DEALLOCATE (moments_rs_img)
 
       ! Initialization of the density matrix
+      ! Also determines and prints the bandstructure
+      CALL prepare_bandstructure(sbe_env%n_spin, sbe_env%n_ao, sbe_env%kset_dist, sbe_env%kset_nkp, &
+         sbe_env%kpoints, local_eigvals, global_eigvals)
       ! Needs KS orbitals - need to get kpoint overlap and ham_zero
       info = 0
       DO i = sbe_env%kpoints%kp_dist(1, sbe_env%mepos), sbe_env%kpoints%kp_dist(2, sbe_env%mepos)
@@ -227,7 +232,7 @@ CONTAINS
             CALL rs_to_kp(sbe_env%ham_zero_rs(j,:,:,:), sbe_env%ham_zero_kp(j,:,:), &
                           sbe_env%kpoints%index_to_cell, sbe_env%kpoints%xkp(:,i))
             ! ! DEBUG : Elementary LUMO-HOMO excitation
-            CALL diagonalize_ham_zero(sbe_env)
+            CALL diagonalize_ham_zero(sbe_env, ispin_opt=j)
             ! Need to get eigenvectors
             ! ! DEBUG : Print out the bandstructure
             ! IF (sbe_env%unit_nr > 0) WRITE (sbe_env%unit_nr, "(A19)") " SBE| Bandstructure"
@@ -251,6 +256,12 @@ CONTAINS
             ! ! Multiply from the left
             ! CALL gemm_square(sbe_env%densmat_work(3,:,:), "N", sbe_env%densmat_work(2,:,:), "C", sbe_env%densmat(j,:,:,i_local))
             ! PRINT *, "kpoint", i, "spin", j, "density AO", sbe_env%densmat(j, :, :, i_local)
+
+            ! Log the eigenvalues
+            IF (ikp_in_dist(sbe_env%kset_dist, i, sbe_env%mepos)) THEN
+               i_kset_local = i - sbe_env%kset_dist(1, sbe_env%mepos) + 1
+               local_eigvals(i_kset_local, :, j) = sbe_env%eigvals(j,:)
+            END IF
             ! Initialize the density
             MARK_USED(lambda)
             CALL init_densmat(sbe_env%densmat(j,:,:,i_local), j, &
@@ -258,6 +269,11 @@ CONTAINS
                               qs_env, sbe_env)
          END DO
       END DO
+
+      ! Print initial bandstructure
+      CALL print_bandstructure(sbe_env%bandstructure_section, &
+         sbe_env%kpoints, sbe_env%kset_dist, sbe_env%kset_xkp, &
+         local_eigvals, global_eigvals)
 
       ! Delta pulse application
       ! In velocity gauge, simply change the vector potential to non-equilibrium value
@@ -277,6 +293,10 @@ CONTAINS
          sbe_env%sim_time = REAL(i_step, kind=dp) * sbe_env%sim_dt
          ! Append to the trace
          sbe_env%time_trace(i_step - sbe_env%sim_start + 1) = sbe_env%sim_time
+
+         ! Determine various outputs -- if not needed, do not calculate expensive matrices
+         do_current_output = (cp_print_key_should_output(logger%iter_info, &
+            sbe_env%current_section) /= 0)
          ! Update the field to current value
          ! Vector potential holds value from last iteration
          IF (sbe_env%dft_control%apply_efield_field) THEN
@@ -349,11 +369,13 @@ CONTAINS
                i_local = i - sbe_env%kpoints%kp_dist(1, sbe_env%mepos) + 1
                CALL add_occ_numbers_kp(sbe_env, sbe_env%occ_numbers, sbe_env%densmat_next(:,:,:,i_local), i)
                ! TODO : add current
-               DO j=1,sbe_env%n_spin
-                  ! TODO : Spin resolved current
-                  ! TODO : could just pass both spins of densmat_next?
-                  CALL add_current_kp(sbe_env, sbe_env%densmat_next(j,:,:,i_local), j, total_current(:), i)
-               END DO
+               IF (do_current_output) THEN
+                  DO j=1,sbe_env%n_spin
+                     ! TODO : Spin resolved current
+                     ! TODO : could just pass both spins of densmat_next?
+                     CALL add_current_kp(sbe_env, sbe_env%densmat_next(j,:,:,i_local), j, total_current(:), i)
+                  END DO
+               END IF
             END IF
          END DO
          ! Info can report e.g. self-consistency failures
@@ -366,7 +388,7 @@ CONTAINS
          !        (definitely when printing occupations or run_info)
          IF (sbe_env%integrand_nkp > 0) THEN
             CALL sbe_env%kpoints%para_env%sum(sbe_env%occ_numbers)
-            CALL sbe_env%kpoints%para_env%sum(total_current)
+            IF (do_current_output) CALL sbe_env%kpoints%para_env%sum(total_current)
          END IF
 
          ! Increment iterations
@@ -386,8 +408,10 @@ CONTAINS
          !    " SBE| Timestep ", i_step, &
          !    " time ", sbe_env%sim_time * femtoseconds, " current ", &
          !    REAL(total_current(1)), REAL(total_current(2)), REAL(total_current(3))
-         CALL output_current(total_current, sbe_env%sim_time, sbe_env%current_section, &
-            do_headers = (i_step == sbe_env%sim_start_orig))
+         IF (do_current_output) THEN
+            CALL output_current(total_current, sbe_env%sim_time, sbe_env%current_section, &
+               do_headers = (i_step == sbe_env%sim_start_orig))
+         END IF
 
          ! Output occupations/vacancies into files
          ! Only output when there is some data, i.e. there is some integrand distribution

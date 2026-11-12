@@ -303,7 +303,7 @@ CONTAINS
       xkp(:) = sbe_env%kpoints%xkp(:,ikp) + sbe_env%xkp_shift(:)
 
       ! Loop for cartesian directions
-      ! TODO : This might be a very good place to test the reallocation price
+      ! DEBUG : Initial tests show that there is very little difference for allocation/no-allocation here
       DO k=1, 3
          ! Get the k-derivative of the Hamiltonian, store it in the densmat workspace
          ! should be done after propagation?
@@ -318,6 +318,8 @@ CONTAINS
          ! H * S^{-1} * d^dagger = densmat_work(2)
          CALL gemm_square(sbe_env%densmat_work(3,:,:), "N", sbe_env%moments_kp(k,:,:), "C", &
             sbe_env%densmat_work(2,:,:))
+         ! CALL gemm_square(sbe_env%ham_zero_kp(ispin,:,:), "N", sbe_env%inv_overlap_kp(:,:), "N", &
+         !    sbe_env%moments_kp(k,:,:), "C", sbe_env%densmat_work(2,:,:))
 
          ! d * S^{-1} = densmat_work(4)
          CALL gemm_square(sbe_env%moments_kp(k,:,:), "N", sbe_env%inv_overlap_kp(:,:), "N", &
@@ -325,6 +327,8 @@ CONTAINS
          ! d * S^{-1} * H = densmat_work(3)
          CALL gemm_square(sbe_env%densmat_work(4,:,:), "N", sbe_env%ham_zero_kp(ispin,:,:), "N", &
             sbe_env%densmat_work(3,:,:))
+         ! CALL gemm_square(sbe_env%moments_kp(k,:,:), "N", sbe_env%inv_overlap_kp(:,:), "N", &
+         !    sbe_env%ham_zero_kp(ispin,:,:), "N", sbe_env%densmat_work(3,:,:))
 
          ! TODO : OMP Parallelize the trace? Could be unstable...
          DO j=1, SIZE(densmat, 2)
