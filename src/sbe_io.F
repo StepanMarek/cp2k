@@ -27,7 +27,8 @@ MODULE sbe_io
                                     rt_file_comp_real
    USE sbe_methods, ONLY: nonherm_metric, &
                           nonidempot_metric
-   USE sbe_utils, ONLY: polymorphic_gather
+   USE sbe_utils, ONLY: polymorphic_gather, &
+                        polymorphic_gather_re
    USE sbe_types, ONLY: sbe_env_type
    USE cp_files, ONLY: file_exists
    USE kpoint_k_r_trafo_simple, ONLY: rs_to_kp
@@ -51,6 +52,7 @@ MODULE sbe_io
             output_ham_rs_restart, &
             read_ham_rs_restart, &
             output_run_info, &
+            prepare_bandstructure, &
             print_bandstructure
 
 CONTAINS
@@ -576,130 +578,115 @@ CONTAINS
    END SUBROUTINE read_ham_rs_restart
 
 ! **************************************************************************************************
-!> \brief Prints the initial bandstructure before propagation
-!> \param ham_zero_kp The equilibrium Hamiltonian, evaluated on the kpoint grid for SBE
+!> \brief Prepares the arrays for logging bandstructure during initial density matrix setup
+!> \param n_spin number of spin species
+!> \param n_mo number of molecular orbitals
+!> \param kset_dist Distribution over the KPOINT_SET subset (which is used for bandstructure)
+!> \param kpoints kpoints type, including valid para_env
+!> \param local_eigvals energies at given mpi-local kpoints, allocated here
+!> \param global_eigvals array of energies for all kset kpoints, allocated here only on source
 !> \author Stepan Marek
-!> \date 09.2026
+!> \date 11.2026
 ! **************************************************************************************************
-   SUBROUTINE print_bandstructure(ham_zero_rs, overlap_rs, bandstructure_section, kpoints, &
-         xkp, lwork, eigwork, eigrwork)
-      REAL(kind=dp), DIMENSION(:,:,:,:)                  :: ham_zero_rs, &
-                                                            overlap_rs
+   SUBROUTINE prepare_bandstructure(n_spin, n_mo, kset_dist, kset_nkp, kpoints, local_eigvals, global_eigvals)
+      INTEGER, INTENT(IN)                                :: n_spin, &
+                                                            n_mo
+      INTEGER, DIMENSION(:,:), INTENT(IN)                :: kset_dist
+      INTEGER, INTENT(IN)                                :: kset_nkp
+      TYPE(kpoint_type)                                  :: kpoints
+      REAL(kind=dp), DIMENSION(:,:,:), ALLOCATABLE, &
+         INTENT(OUT)                                     :: local_eigvals
+      REAL(kind=dp), DIMENSION(:,:,:), POINTER, &
+         INTENT(OUT)                                     :: global_eigvals
+      INTEGER                                            :: mepos, local_nkp
+      TYPE(cp_logger_type), POINTER                      :: logger
+
+      mepos = kpoints%para_env%mepos + 1
+
+      local_nkp = kset_dist(2,mepos) - kset_dist(1,mepos) + 1
+
+      ! Contiguous in the first dimension
+      ALLOCATE (local_eigvals(local_nkp, n_mo, n_spin), source=0.0_dp)
+
+      NULLIFY (global_eigvals)
+      IF (kpoints%para_env%mepos == kpoints%para_env%source) THEN
+         ! Allocate the global eigvals as well
+         ALLOCATE (global_eigvals(kset_nkp, n_mo, n_spin), source=0.0_dp)
+      END IF
+   END SUBROUTINE prepare_bandstructure
+! **************************************************************************************************
+!> \brief Prints the initial bandstructure before propagation
+!> \param bandstructure_section The printkey section for bandstructure printing
+!> \param kpoints kpoints type, including valid para_env
+!> \param kset_dist Distribution over the KPOINT_SET subset (which is used for bandstructure)
+!> \param xkp kpoint coordinates for kpoints in kset (in kset indexing)
+!> \param local_eigvals energies at given mpi-local kpoints, populated elsewhere
+!> \param global_eigvals array of energies for all kset kpoints, allocated only on source
+!> \author Stepan Marek
+!> \date 11.2026
+! **************************************************************************************************
+   SUBROUTINE print_bandstructure(bandstructure_section, &
+         kpoints, kset_dist, xkp, local_eigvals, global_eigvals)
       TYPE(section_vals_type), POINTER                   :: bandstructure_section
       TYPE(kpoint_type)                                  :: kpoints
+      INTEGER, DIMENSION(:,:)                            :: kset_dist
       REAL(kind=dp), DIMENSION(:,:)                      :: xkp
-      INTEGER                                            :: lwork
-      COMPLEX(kind=dp), DIMENSION(:)                     :: eigwork
-      REAL(kind=dp), DIMENSION(:)                        :: eigrwork
+      REAL(kind=dp), DIMENSION(:,:,:), ALLOCATABLE, &
+         INTENT(INOUT)                                   :: local_eigvals
+      REAL(kind=dp), DIMENSION(:,:,:), POINTER, &
+         INTENT(INOUT)                                   :: global_eigvals
       TYPE(cp_logger_type), POINTER                      :: logger
-      INTEGER                                            :: unit_nr, &
-                                                            i, j, k, &
-                                                            info, &
-                                                            local_nkp, &
-                                                            i_local, &
+      INTEGER                                            :: n_spin, &
+                                                            n_mo, &
                                                             nkp, &
-                                                            n_ao, &
-                                                            n_spin, &
-                                                            mepos
-      REAL(kind=dp), DIMENSION(:,:,:), ALLOCATABLE       :: local_eigvals
-      REAL(kind=dp), DIMENSION(:,:,:), POINTER           :: gathered_eigvals
-      COMPLEX(kind=dp), DIMENSION(:,:), ALLOCATABLE      :: h_kp, s_kp, s_work
+                                                            unit_nr, &
+                                                            i, j, k
 
-      ! Create the logger to check whether the output is on
+      ! If no output, return
       logger => cp_get_default_logger()
-      IF (cp_print_key_should_output(logger%iter_info, bandstructure_section) == 0) RETURN
+      IF (cp_print_key_should_output(logger%iter_info, bandstructure_section) == 0) THEN
+         ! Deallocate arrays
+         DEALLOCATE (local_eigvals)
+         IF (ASSOCIATED(global_eigvals)) DEALLOCATE (global_eigvals)
+         RETURN
+      END IF
 
-      n_spin = SIZE(ham_zero_rs, 1)
-      n_ao = SIZE(ham_zero_rs, 2)
-      mepos = kpoints%para_env%mepos + 1
-      local_nkp = kpoints%kp_dist(2, mepos) - kpoints%kp_dist(1,mepos) + 1
-      nkp = kpoints%nkp
+      n_spin = SIZE(local_eigvals, 3)
+      n_mo = SIZE(local_eigvals, 2)
 
-      ! Allocate local storage for eigenvalues
-      ALLOCATE (local_eigvals(n_spin, n_ao, local_nkp))
-
-      ! Temporary matrices for ZHEGV
-      ALLOCATE (h_kp(n_ao, n_ao))
-      ALLOCATE (s_kp(n_ao, n_ao))
-      ALLOCATE (s_work(n_ao, n_ao))
-
-      ! Iterate over local k-points
-      DO i = kpoints%kp_dist(1, mepos), kpoints%kp_dist(2, mepos)
-         i_local = i - kpoints%kp_dist(1, mepos) + 1
-
-         ! Overlap matrix for this k-point
-         CALL rs_to_kp(overlap_rs(1,:,:,:), s_kp, &
-                       kpoints%index_to_cell, kpoints%xkp(:,i))
-
-         DO j = 1, n_spin
-            ! Hamiltonian matrix for this k-point and spin
-            CALL rs_to_kp(ham_zero_rs(j,:,:,:), h_kp, &
-                          kpoints%index_to_cell, kpoints%xkp(:,i))
-            s_work(:,:) = s_kp(:,:)
-
-            CALL ZHEGV(1, 'V', 'U', n_ao, h_kp, n_ao, &
-                       s_work, n_ao, &
-                       local_eigvals(j,:,i_local), eigwork, lwork, eigrwork, info)
-
-            IF (info /= 0) THEN
-               CPABORT("SBE| Bandstructure: ZHEGV failed for ikp=" // CHAR(i) // " ispin=" // CHAR(j))
-            END IF
+      DO k=1, n_spin
+         DO j=1, n_mo
+            CALL polymorphic_gather_re(local_eigvals(:,j,k), &
+               global_eigvals(:,j,k), &
+               kpoints%para_env, &
+               kset_dist)
          END DO
       END DO
 
-      ! Open the file to check if we are on IO rank
+      ! Global eigvals now valid on source rank
       unit_nr = cp_print_key_unit_nr(logger, bandstructure_section, extension=".dat", file_position="REWIND")
 
-      ! Allocate gathered array only on IO rank
-      NULLIFY (gathered_eigvals)
       IF (unit_nr > 0) THEN
-         ALLOCATE (gathered_eigvals(n_spin, n_ao, nkp))
-      ELSE
-         ALLOCATE (gathered_eigvals(0,0,0))
-      END IF
-
-      ! Gather eigenvalues to the IO rank
-      ! We gather spin by spin
-      DO j = 1, n_spin
-         ! TODO : Redo as polymorphic gather, use kset_dist, which has to be newly passed to the routine
-         ! DO k = 1, n_ao
-         !    ! Not contiguous, but distributed along this direction
-         !    CALL polymorphic_gather(&
-         !       local_eigvals(j,k,:), &
-         !       gathered_eigvals(j,k,:), &
-         !       kpoints%para_env, &
-         !       kpoints%kp_dist
-         !       )
-         ! END DO
-         CALL kpoints%para_env%gather( &
-            local_eigvals(j,:,:), &
-            gathered_eigvals(j,:,:) &
-         )
-      END DO
-
-      ! Output on IO rank
-      ! TODO : Prefix for STDOUT
-      ! TODO : Check ordering
-      IF (unit_nr > 0) THEN
+         ! TODO : Maybe output also k_(x/y/z) in reciprocal Cartesian units?
          WRITE (unit_nr, "(A10,A14,A14,A14,A5,A11,A20)") "# kp index", "k_x [b_x]", "k_y [b_y]", "k_z [b_z]", &
             "spin", "band index", "energy [eV]"
 
+         nkp = SIZE(global_eigvals, 1)
+
          DO i = 1, nkp
-            DO j = 1, n_spin
-               DO k = 1, n_ao
+            DO j = 1, n_mo
+               DO k = 1, n_spin
                   WRITE (unit_nr, "(I10,E14.6E2,E14.6E2,E14.6E2,I5,I11,E20.8E3)") &
-                     i, xkp(:,i), j, k, gathered_eigvals(j, k, i)*evolt
+                     i, xkp(:,i), k, j, global_eigvals(i, j, k)*evolt
                END DO
             END DO
          END DO
          CALL cp_print_key_finished_output(unit_nr, logger, bandstructure_section)
+
+         DEALLOCATE (global_eigvals)
       END IF
 
       DEALLOCATE (local_eigvals)
-      DEALLOCATE (h_kp)
-      DEALLOCATE (s_kp)
-      DEALLOCATE (s_work)
-      IF (ASSOCIATED(gathered_eigvals)) DEALLOCATE (gathered_eigvals)
    END SUBROUTINE print_bandstructure
 ! **************************************************************************************************
 !> \brief Prints various updated about the current loop

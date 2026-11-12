@@ -36,7 +36,8 @@ MODULE sbe_utils
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'sbe_utils'
 
    PUBLIC :: print_sbe_header_info, &
-             polymorphic_gather
+             polymorphic_gather, &
+             polymorphic_gather_re
 
 CONTAINS
 ! **************************************************************************************************
@@ -122,4 +123,70 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE polymorphic_gather
+   ! DEBUG : Redo via interfaces
+   ! TODO : classic dist everywhere
+   SUBROUTINE polymorphic_gather_re(local_vec, global_vec, para_env, dist)
+      REAL(kind=dp), DIMENSION(:), INTENT(IN)            :: local_vec
+      REAL(kind=dp), DIMENSION(:), INTENT(OUT)           :: global_vec
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      ! Determine whether lengths only is better than classic
+      INTEGER, DIMENSION(:,:), INTENT(IN)                :: dist
+      CHARACTER(len=*), PARAMETER                        :: routineN="polymorphic_gather"
+      TYPE(mp_request_type), DIMENSION(:), ALLOCATABLE   :: requests
+      INTEGER                                            :: offset, i, handle
+      INTEGER, DIMENSION(:), ALLOCATABLE                 :: len_dist
+
+      CALL timeset(routineN, handle)
+
+      offset = 0
+
+      ALLOCATE (requests(para_env%num_pe))
+
+      ALLOCATE (len_dist(para_env%num_pe), source=0)
+
+      DO i = 1, para_env%num_pe
+         len_dist(i) = dist(2,i) - dist(1,i) + 1
+      END DO
+
+      ! TODO : Might be able to redo via non-separated irecv/isend and waitall
+      IF (para_env%mepos == para_env%source) THEN
+         ! Receive everything on source
+         DO i=1,para_env%num_pe
+            IF (i == para_env%mepos+1) THEN
+               ! Just copy
+               global_vec(offset+1:offset+len_dist(i)) = local_vec(1:len_dist(i))
+            ELSE
+               ! MP ireceive
+               CALL para_env%irecv(global_vec(offset+1:offset+len_dist(i)), & ! message
+                  i-1, &! source
+                  requests(i)) ! request
+            END IF
+            offset = offset + len_dist(i)
+         END DO
+      ELSE
+         ! Send from this rank to source
+         CALL para_env%isend(local_vec, & ! message
+            para_env%source, & ! destination
+            requests(para_env%mepos+1)) ! request
+      END IF
+
+      ! Sync
+      IF (para_env%mepos == para_env%source) THEN
+         DO i=1, para_env%num_pe
+
+            ! We are not waiting for anything on source
+            IF (i-1 == para_env%source) CYCLE
+
+            CALL requests(i)%wait()
+
+         END DO
+      ELSE
+         CALL requests(para_env%mepos+1)%wait()
+      ENDIF
+
+      DEALLOCATE (requests)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE polymorphic_gather_re
 END MODULE sbe_utils
