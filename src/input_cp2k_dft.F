@@ -1650,7 +1650,7 @@ CONTAINS
                                         "Uses a Baker-Campbell-Hausdorff expansion to propagate the density matrix,"// &
                                         " only works for density propagation", &
                                         "Uses diagonalisation of the exponent matrices to determine the "// &
-                                        "matrix exponential exactly. Only implemented for GWBSE."))
+                                        "matrix exponential exactly. Only implemented for RT-BSE."))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
