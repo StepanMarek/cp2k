@@ -391,6 +391,14 @@ CONTAINS
             IF (do_current_output) CALL sbe_env%kpoints%para_env%sum(total_current)
          END IF
 
+         ! Polarisation current calculation in AO
+         ! Done before iteration to match conditions for setting of do_current_output
+         ! Therefore, time is increased
+         IF (do_current_output) THEN
+            CALL output_current(total_current, sbe_env%sim_time+sbe_env%sim_dt, sbe_env%current_section, &
+               do_headers = (i_step == sbe_env%sim_start_orig))
+         END IF
+
          ! Increment iterations
          CALL cp_iterate(logger%iter_info, iter_nr=i_step, last=(i_step == sbe_env%sim_nsteps))
 
@@ -401,17 +409,6 @@ CONTAINS
 
          ! Run info
          CALL output_run_info(sbe_env, max_buffer)
-
-         ! Polarisation current calculation in AO
-         ! TODO : Imaginary part output?
-         ! IF (sbe_env%unit_nr > 0) WRITE(sbe_env%unit_nr, "(A15,I6,A6,F7.4,A17,E20.8E3,E20.8E3,E20.8E3)") &
-         !    " SBE| Timestep ", i_step, &
-         !    " time ", sbe_env%sim_time * femtoseconds, " current ", &
-         !    REAL(total_current(1)), REAL(total_current(2)), REAL(total_current(3))
-         IF (do_current_output) THEN
-            CALL output_current(total_current, sbe_env%sim_time, sbe_env%current_section, &
-               do_headers = (i_step == sbe_env%sim_start_orig))
-         END IF
 
          ! Output occupations/vacancies into files
          ! Only output when there is some data, i.e. there is some integrand distribution
