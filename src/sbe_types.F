@@ -45,7 +45,8 @@ MODULE sbe_types
                               sbe_propagator_euler, &
                               sbe_kpoints_mpack, &
                               sbe_kpoints_kset, &
-                              sbe_kpoints_kset_mpack
+                              sbe_kpoints_kset_mpack, &
+                              sbe_kpoints_general
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -169,6 +170,7 @@ CONTAINS
       REAL(kind=dp), DIMENSION(:,:), POINTER             :: mpack_xkp
       REAL(kind=dp), DIMENSION(:), ALLOCATABLE           :: mpack_wkp, &
                                                             kset_wkp
+      REAL(kind=dp), DIMENSION(:), POINTER               :: general_xwkp
 
       CALL timeset(routineN, handle)
 
@@ -232,6 +234,9 @@ CONTAINS
             ! TODO : Refactor so that the union is created without code doubling.
             ! TODO : Refactor distribution, so that it acts on the kset and mpack parts separately
             sbe_env%kpoints%kp_scheme = "MPACK+SET"
+         CASE (sbe_kpoints_general)
+            ! Explicitly specified points and weights
+            sbe_env%kpoints%kp_scheme = "GENERAL"
          CASE DEFAULT
             CPABORT("Unknown kpoint set scheme")
       END SELECT
@@ -254,6 +259,25 @@ CONTAINS
          CALL compute_xkp(mpack_xkp, 1, SIZE(mpack_xkp, 2), mpack_dim)
          ALLOCATE (mpack_wkp(SIZE(mpack_xkp, 2)))
          mpack_wkp(:) = 1.0_dp/REAL(SIZE(mpack_xkp, 2), kind=dp)
+      ELSE IF (IAND(kp_scheme_i, sbe_kpoints_general) == sbe_kpoints_general) THEN
+         ! Get the number of kpoints
+         CALL section_vals_val_get(kp_section, "KPOINT", n_rep_val=sbe_env%integrand_nkp)
+
+         ! Allocate xkp and wkp array
+         NULLIFY (mpack_xkp)
+         ALLOCATE (mpack_xkp(3,sbe_env%integrand_nkp), source=0.0_dp)
+         ! Allocatable, no need to nullify
+         ! TODO : Pointer vs. allocatable?
+         ALLOCATE (mpack_wkp(sbe_env%integrand_nkp))
+
+         DO i=1, sbe_env%integrand_nkp
+            ! Get the pointer to the values
+            CALL section_vals_val_get(kp_section, "KPOINT", i_rep_val=i, &
+               r_vals=general_xwkp)
+            mpack_xkp(1:3,i) = general_xwkp(1:3)
+            mpack_wkp(i) = general_xwkp(4)
+         END DO
+
       ELSE
          ! Empty grid
          sbe_env%kpoints%nkp_grid(:) = 0

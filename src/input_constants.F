@@ -1042,7 +1042,8 @@ MODULE input_constants
 
    INTEGER, PARAMETER, PUBLIC               :: sbe_kpoints_mpack = 1, &
                                                sbe_kpoints_kset = 2, &
-                                               sbe_kpoints_kset_mpack = 3 ! binary OR
+                                               sbe_kpoints_kset_mpack = 3, & ! binary OR
+                                               sbe_kpoints_general = 4
 
    INTEGER, PARAMETER, PUBLIC               :: kpoint_units_bvec = 1, &
                                                kpoint_units_angstrom = 2, &
