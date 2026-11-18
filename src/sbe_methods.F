@@ -56,28 +56,24 @@ CONTAINS
 !> \author Stepan Marek
 !> \date 12.2025
 ! **************************************************************************************************
-   SUBROUTINE init_densmat(densmat, ispin, ham, smat, qs_env, sbe_env)
+   SUBROUTINE init_densmat(densmat, ispin, qs_env, sbe_env)
       COMPLEX(kind=dp), DIMENSION(:,:), INTENT(OUT)         :: densmat
       INTEGER, INTENT(IN)                                   :: ispin
-      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(INOUT)       :: ham
-      COMPLEX(kind=dp), DIMENSION(:,:), INTENT(INOUT)       :: smat
       TYPE(qs_environment_type), POINTER, INTENT(IN)        :: qs_env
       TYPE(sbe_env_type), POINTER, INTENT(IN)               :: sbe_env
       TYPE(mo_set_type), DIMENSION(:), POINTER              :: mos
-      REAL(kind=dp), DIMENSION(:), POINTER                  :: occupations
+      REAL(kind=dp), DIMENSION(:), ALLOCATABLE              :: occupations
       INTEGER                                               :: n_ao, &
-                                                               i, &
-                                                               info, &
-                                                               currel
+                                                               i
+      REAL(kind=dp)                                         :: currel
 
       CALL get_qs_env(qs_env, mos=mos)
 
       ! Determine occupations based on aufbau -- no need to have mos evaluated
-      currel = 0
+      currel = 0.0_dp
       ! TODO : Get rid of sbe_env dependence by providing workspaces?
       ! Diagonalize the hamiltonian with overlap to get the MOs
       n_ao = sbe_env%n_ao
-      NULLIFY (occupations)
       ALLOCATE (occupations(n_ao), source=0.0_dp)
       DO i=1,n_ao
          currel = currel + mos(ispin)%maxocc
@@ -124,6 +120,8 @@ CONTAINS
       CALL gemm_square(sbe_env%densmat_work(1,:,:), 'N', &
                        sbe_env%eigvectors(ispin,:,:), 'C', densmat(:, :))
 
+      DEALLOCATE (occupations)
+
    END SUBROUTINE init_densmat
 ! **************************************************************************************************
 !> \brief Pretty prints a complex matrix
@@ -164,7 +162,6 @@ CONTAINS
       INTEGER, INTENT(IN)                                   :: ispin
       CHARACTER(len=*), PARAMETER                           :: routineN="get_damping_term"
       INTEGER                                               :: handle, &
-                                                               info, &
                                                                i, j
       REAL(kind=dp)                                         :: energy_exp
 
@@ -223,7 +220,7 @@ CONTAINS
       COMPLEX(kind=dp), DIMENSION(:,:)                      :: occ_numbers ! dim 1 : spin, dim 2 : band
       COMPLEX(kind=dp), DIMENSION(:,:,:)                    :: densmat ! dim 1 : spin, dim 2 : rows, dim 3 : cols
       INTEGER                                               :: ikp
-      INTEGER                                               :: n, info, ispin
+      INTEGER                                               :: n, ispin
 
       ! For current local kpoint, get the transformation from AO to get n_m(k)
       DO ispin=1, sbe_env%n_spin

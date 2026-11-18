@@ -52,7 +52,7 @@ MODULE rt_bse_types
    USE qs_tensors, ONLY: neighbor_list_3c_destroy
    USE integral_library_types, ONLY: coulomb_operator_type
    USE input_constants, ONLY: use_mom_ref_coac, &
-                              rtp_bse_ham_g0w0, &
+                              rtp_bse_ham_gw, &
                               do_bch, &
                               do_exact, &
                               rtp_bse_ham_gw, &
@@ -349,7 +349,7 @@ MODULE rt_bse_types
       ! These matrices are always real
       INTEGER                                                   :: etrs_max_iter = 10
       ! Default value is the g0w0 reference
-      INTEGER                                                   :: ham_reference_type = rtp_bse_ham_g0w0
+      INTEGER                                                   :: ham_reference_type = rtp_bse_ham_gw
       INTEGER                                                   :: mat_exp_method = 4
       INTEGER                                                   :: unit_nr = -1
       REAL(kind=dp), DIMENSION(:, :, :), POINTER                :: int_3c_array => NULL()

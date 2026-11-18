@@ -2110,13 +2110,6 @@ CONTAINS
                           " in the Green's propagator.", &
                           usage="RTBSE_HAMILTONIAN GW", &
                           default_i_val=rtp_bse_ham_gw, &
-                          enum_c_vals=s2a("KS", "GW"), &
-                          enum_i_vals=[rtp_bse_ham_ks, rtp_bse_ham_gw], &
-                          enum_desc=s2a("Use Kohn-Sham Hamiltonian for Green's function propagation.", &
-                                        "Use GW Hamiltonian for Green's function propagation. The GW "// &
-                                        "eigenvalues from the highest-level GW flavor will be picked."))
-                          usage="RTBSE_HAMILTONIAN GW", &
-                          default_i_val=rtp_bse_ham_gw, &
                           enum_c_vals=s2a("KS", "GW", "KS_FREE"), &
                           enum_i_vals=[rtp_bse_ham_ks, rtp_bse_ham_gw, rtp_bse_ham_ks_free], &
                           enum_desc=s2a("Use Kohn-Sham Hamiltonian for Green's propagation.", &

@@ -33,7 +33,6 @@ MODULE sbe
    USE sbe_io,                         ONLY: output_field, &
                                              output_occupation_file, &
                                              print_mat, &
-                                             gather_occupations, &
                                              output_occupations_kp_file, &
                                              output_current, &
                                              output_ham_rs_restart, &
@@ -112,16 +111,11 @@ CONTAINS
                                                             j, k, &
                                                             info, &
                                                             handle
-      ! REAL(kind=dp), DIMENSION(3)                        :: single_k
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s_kp, matrix_h_kp, moments_rs_img
-      ! TYPE(dbcsr_type)                                   :: s_k, sc_k
-      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-              POINTER                                    :: sab_nl
       TYPE(sbe_env_type), POINTER                        :: sbe_env
-      REAL(kind=dp)                                      :: total_n, lambda, buffer, max_buffer
+      REAL(kind=dp)                                      :: lambda, buffer, max_buffer
       COMPLEX(kind=dp), DIMENSION(3)                     :: total_current
       TYPE(cp_logger_type), POINTER                      :: logger
-      REAL(kind=dp), DIMENSION(:), POINTER               :: ref_custom
       LOGICAL                                            :: do_current_output
       ! Variables for bandstructure
       ! TODO : Maybe separate actual run and pre-run preparation
@@ -265,7 +259,6 @@ CONTAINS
             ! Initialize the density
             MARK_USED(lambda)
             CALL init_densmat(sbe_env%densmat(j,:,:,i_local), j, &
-                              sbe_env%ham_zero_kp(j,:,:), sbe_env%overlap_kp, &
                               qs_env, sbe_env)
          END DO
       END DO
@@ -284,7 +277,7 @@ CONTAINS
 
       ! RT-schemes typically use "MD" as the iteration level
       logger => cp_get_default_logger()
-      CALL cp_add_iter_level(logger%iter_info, "MD")
+      CALL cp_add_iter_level(logger, "MD")
 
       ! Start the actual simulation
       DO i_step=sbe_env%sim_start, sbe_env%sim_nsteps
@@ -432,7 +425,7 @@ CONTAINS
       END DO
 
       ! Stop iteratons
-      CALL cp_rm_iter_level(logger%iter_info, "MD")
+      CALL cp_rm_iter_level(logger, "MD")
       ! Deallocations
       CALL release_sbe_env(sbe_env)
 

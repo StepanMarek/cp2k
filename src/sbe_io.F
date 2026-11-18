@@ -48,7 +48,6 @@ MODULE sbe_io
             output_occupations_kp_file, &
             output_current, &
             print_mat, &
-            gather_occupations, &
             output_ham_rs_restart, &
             read_ham_rs_restart, &
             output_run_info, &
@@ -303,32 +302,6 @@ CONTAINS
             WRITE (6,"(E15.3E3,E15.3E3)") REAL(mat(i,j)),AIMAG(mat(i,j))
       END DO
    END SUBROUTINE print_mat
-! **************************************************************************************************
-!> \brief Gathers the k-point resolved occupations from different MPI ranks
-!> \param local_occupations Array of local occupations
-!> \param occupations Memory allocated on IO rank only, where all the occupations are gathered
-!> \param kpoints Kpoint type, which holds the distribution information
-!> \param ispin Spin index, defaults to 1 (closed shell case)
-!> \author Stepan Marek
-!> \date 08.2026
-! **************************************************************************************************
-   SUBROUTINE gather_occupations(local_occupations, occupations, kpoints, ispin_opt)
-      COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER        :: local_occupations ! spin,band,kpoint
-      COMPLEX(kind=dp), DIMENSION(:,:,:), POINTER        :: occupations
-      TYPE(kpoint_type), POINTER                         :: kpoints
-      INTEGER, OPTIONAL                                  :: ispin_opt
-      INTEGER                                            :: mepos, &
-                                                            ispin, &
-                                                            ikp_min, &
-                                                            ikp_max
-      ispin = 1
-      IF (PRESENT(ispin_opt)) ispin = ispin_opt
-
-      CALL kpoints%para_env%gather( &
-         local_occupations(ispin,:,:), &
-         occupations(ispin, :, :) &
-      )
-   END SUBROUTINE gather_occupations
 ! **************************************************************************************************
 !> \brief Gathers the k-point resolved occupations from different MPI ranks and prints them to file
 !> \param sbe_env SBE Environment (for parameters only)
@@ -599,7 +572,6 @@ CONTAINS
       REAL(kind=dp), DIMENSION(:,:,:), POINTER, &
          INTENT(OUT)                                     :: global_eigvals
       INTEGER                                            :: mepos, local_nkp
-      TYPE(cp_logger_type), POINTER                      :: logger
 
       mepos = kpoints%para_env%mepos + 1
 
@@ -744,7 +716,8 @@ CONTAINS
          DO ispin=1, sbe_env%n_spin
 
             ! Scale by spin degeneracy
-            total_n = total_n + SUM(sbe_env%occ_numbers(ispin,:)) * REAL(3-sbe_env%n_spin, kind=dp)
+            total_n = total_n + REAL(SUM(sbe_env%occ_numbers(ispin,:)), kind=dp) &
+               * REAL(3-sbe_env%n_spin, kind=dp)
 
          END DO
       END IF

@@ -158,8 +158,7 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_s_kp, &
                                                             matrix_ks_kp
       TYPE(cell_type), POINTER                           :: cell
-      TYPE(section_vals_type), POINTER                   :: kpoint_section, &
-                                                            force_input, &
+      TYPE(section_vals_type), POINTER                   :: force_input, &
                                                             hfx_section, &
                                                             kp_section
       REAL(kind=dp)                                      :: efficiency

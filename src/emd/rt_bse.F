@@ -1601,7 +1601,6 @@ CONTAINS
       TYPE(rtbse_env_type), POINTER                :: rtbse_env
       TYPE(cp_cfm_type), DIMENSION(:), POINTER     :: rho
       REAL(kind=dp), OPTIONAL                      :: lambda_opt
-      CHARACTER(len=*), PARAMETER                  :: routineN = "init_rho_basic_excitation"
       INTEGER                                      :: i, k
       REAL(kind=dp)                                :: lambda
 

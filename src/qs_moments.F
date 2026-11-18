@@ -3283,7 +3283,8 @@ SUBROUTINE qs_moment_kpoints_deep(qs_env, xkp, dipole, rcc, berry_c, momentum, e
       TYPE(qs_environment_type), POINTER                 :: qs_env
       LOGICAL, OPTIONAL                                  :: do_parallel, do_hfx_opt
       LOGICAL                                            :: my_do_parallel, calc_dipole, calc_bc, &
-                                                            calc_momentum, calc_energy
+                                                            calc_momentum, calc_energy, &
+                                                            do_hfx
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'qs_moment_kpoints_deep'
       COMPLEX(KIND=dp)                                   :: phase, tmp_max
       COMPLEX(KIND=dp), DIMENSION(:, :), ALLOCATABLE     :: C_k, H_k, S_k, D_k, CDC, C_dH_C, &
